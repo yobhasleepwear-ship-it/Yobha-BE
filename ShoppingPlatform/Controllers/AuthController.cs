@@ -235,12 +235,27 @@ namespace ShoppingPlatform.Controllers
                     Audience = new[] { _googleSettings.ClientId }
                 });
             }
-            catch (Exception)
+            catch (Google.Apis.Auth.InvalidJwtException)
             {
-                return BadRequest(new { message = "Invalid Google token" });
+                // token invalid / signature failure / expired
+                return Unauthorized(new { message = "Invalid or expired Google token" });
             }
 
+            // basic checks
+            if (payload == null || string.IsNullOrEmpty(payload.Email))
+                return Unauthorized(new { message = "Google token missing email" });
+
+            // optional but recommended: require email verified
+            if (payload.EmailVerified != true)
+                return Unauthorized(new { message = "Google account email not verified" });
+
+            // optional: explicit issuer check (extra safety)
+            if (payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com")
+                return Unauthorized(new { message = "Invalid token issuer" });
+
+            // now upsert user
             var user = await _users.GetByEmailAsync(payload.Email);
+
             if (user is null)
             {
                 user = new User
@@ -248,19 +263,27 @@ namespace ShoppingPlatform.Controllers
                     Email = payload.Email,
                     FullName = payload.Name,
                     Providers = new System.Collections.Generic.List<ProviderInfo> {
-                        new ProviderInfo { Provider = "Google", ProviderId = payload.Subject }
-                    },
+                new ProviderInfo { Provider = "Google", ProviderId = payload.Subject }
+            },
                     Roles = new[] { "User" },
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = DateTime.UtcNow,
+                    EmailVerified = payload.EmailVerified // if you have this field on User
                 };
                 await _users.CreateAsync(user);
             }
             else
             {
-                var already = user.Providers?.Exists(p => p.Provider == "Google" && p.ProviderId == payload.Subject) ?? false;
+                // ensure Providers list exists before adding
+                user.Providers ??= new System.Collections.Generic.List<ProviderInfo>();
+
+                var already = user.Providers.Exists(p => p.Provider == "Google" && p.ProviderId == payload.Subject);
                 if (!already)
                 {
                     user.Providers.Add(new ProviderInfo { Provider = "Google", ProviderId = payload.Subject });
+                    // update email verified flag if you store it
+                    if (payload.EmailVerified == true)
+                        user.EmailVerified = true;
+
                     await _users.UpdateAsync(user.Id!, user);
                 }
             }
@@ -268,6 +291,7 @@ namespace ShoppingPlatform.Controllers
             var token = _jwt.GenerateToken(user);
             return Ok(new { token, user = new { user.Id, user.Email, user.FullName } });
         }
+
 
         // -----------------------
         // Me - protected

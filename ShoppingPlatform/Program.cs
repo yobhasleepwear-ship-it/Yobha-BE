@@ -16,6 +16,41 @@ var builder = WebApplication.CreateBuilder(args);
 var configuration = builder.Configuration;
 
 // ---------------------------
+// CORS - read allowed origins from config or use defaults for local dev
+// ---------------------------
+var allowedOrigins = configuration.GetSection("AllowedCorsOrigins").Get<string[]>()
+                     ?? new[]
+                     {
+                         "http://localhost:5173",   // common frontend dev port
+                         "http://localhost:3000",
+                         "https://localhost:5001",  // swagger / other
+                         "https://localhost:7272"   // API itself
+                     };
+
+
+// CORS - allow any localhost/loopback origin (dev only)
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowLocalhostLoopback", policy =>
+    {
+        policy
+            // Allow any localhost/127.0.0.1/[::1] origin (any port)
+            .SetIsOriginAllowed(origin =>
+            {
+                // make sure origin is a valid uri
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                    return false;
+
+                // Accept loopback addresses (localhost, 127.0.0.1, ::1)
+                return uri.IsLoopback;
+            })
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+        // .AllowCredentials(); // be careful: only enable if you need cookies & you set explicit origins
+    });
+});
+
+// ---------------------------
 // MongoDB
 // ---------------------------
 builder.Services.Configure<MongoDbSettings>(configuration.GetSection("Mongo"));
@@ -32,8 +67,6 @@ var jwtSettings = configuration.GetSection("Jwt").Get<JwtSettings>()!;
 // ---------------------------
 // Repositories & Services
 // ---------------------------
-// Register concrete repositories/services using your project namespaces.
-// If you have interfaces, prefer AddSingleton<IThing, Thing>() — adjust as needed.
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<ProductRepository>();
@@ -47,7 +80,6 @@ builder.Services.Configure<TwilioSettings>(configuration.GetSection("Twilio"));
 var twilioSettings = configuration.GetSection("Twilio").Get<TwilioSettings>();
 if (twilioSettings is not null && !string.IsNullOrEmpty(twilioSettings.AccountSid) && !string.IsNullOrEmpty(twilioSettings.AuthToken))
 {
-    // initialize Twilio once at startup (so the SDK is ready)
     TwilioClient.Init(twilioSettings.AccountSid, twilioSettings.AuthToken);
 }
 builder.Services.AddSingleton<ISmsSender, TwilioSmsSender>();
@@ -65,12 +97,10 @@ var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
     var region = RegionEndpoint.GetBySystemName(awsSettings.Region);
-    // IAmazonS3 will use the default credentials chain (env vars, IAM role, shared profile).
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(region));
 }
 else
 {
-    // Fallback: add a default client (region will be default AWS SDK region)
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client());
 }
 builder.Services.AddSingleton<IStorageService, S3StorageService>();
@@ -142,6 +172,7 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Swagger in dev
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -149,6 +180,9 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// IMPORTANT: UseCors should be before Authentication/Authorization and before MapControllers
+app.UseCors("AllowLocalhostLoopback");
 
 // Authentication must come before Authorization
 app.UseAuthentication();

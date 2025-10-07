@@ -14,6 +14,8 @@ namespace ShoppingPlatform.Models
         public string? PhoneNumber { get; set; }     // e.g. "+919876543210"
         public bool PhoneVerified { get; set; } = false;
 
+        public bool EmailVerified { get; set; } = false;  // ✅ Added this line
+
         public string[] Roles { get; set; } = new[] { "User" };
 
         // External providers info
