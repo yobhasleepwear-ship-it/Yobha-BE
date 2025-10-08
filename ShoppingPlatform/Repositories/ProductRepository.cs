@@ -1,12 +1,11 @@
-﻿using System;
+﻿using MongoDB.Bson;
+using MongoDB.Driver;
+using ShoppingPlatform.Models;
+using ShoppingPlatform.Dto;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using MongoDB.Driver;
-using ShoppingPlatform.Configurations;
-using ShoppingPlatform.Models;
-using Microsoft.Extensions.Options;
-using MongoDB.Bson;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -14,235 +13,279 @@ namespace ShoppingPlatform.Repositories
     {
         private readonly IMongoCollection<Product> _col;
 
-        public ProductRepository(IMongoClient client, IOptions<MongoDbSettings> mongoSettings)
+        public ProductRepository(IMongoDatabase db)
         {
-            var db = client.GetDatabase(mongoSettings.Value.DatabaseName);
-            _col = db.GetCollection<Product>("products");
+            _col = db.GetCollection<Product>("Products");
+            EnsureIndexes();
         }
 
-        // -------------------------
-        // Basic CRUD
-        // -------------------------
-        public async Task CreateAsync(Product product)
+        private void EnsureIndexes()
         {
-            if (product == null) throw new ArgumentNullException(nameof(product));
-            await _col.InsertOneAsync(product);
+            try
+            {
+                var indexKeys = Builders<Product>.IndexKeys.Ascending(p => p.Slug);
+                _col.Indexes.CreateOne(new CreateIndexModel<Product>(indexKeys, new CreateIndexOptions { Unique = true }));
+
+                var idx2 = Builders<Product>.IndexKeys.Combine(
+                    Builders<Product>.IndexKeys.Ascending(p => p.Category),
+                    Builders<Product>.IndexKeys.Descending(p => p.CreatedAt));
+                _col.Indexes.CreateOne(new CreateIndexModel<Product>(idx2));
+            }
+            catch
+            {
+                // ignore index creation errors (e.g., in tests)
+            }
         }
 
-        public async Task<Product?> GetByIdAsync(string id)
+        /// <summary>
+        /// Query products for list view. Returns DTO list and total count.
+        /// </summary>
+        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,
+            decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
         {
-            if (string.IsNullOrWhiteSpace(id)) return null;
-            return await _col.Find(p => p.Id == id).FirstOrDefaultAsync();
-        }
-
-        public async Task UpdateAsync(Product product)
-        {
-            if (product == null) throw new ArgumentNullException(nameof(product));
-            await _col.ReplaceOneAsync(p => p.Id == product.Id, product, new ReplaceOptions { IsUpsert = false });
-        }
-
-        public async Task DeleteAsync(string id)
-        {
-            if (string.IsNullOrWhiteSpace(id)) return;
-            await _col.DeleteOneAsync(p => p.Id == id);
-        }
-
-        // -------------------------
-        // Query / Pagination / Sorting
-        // -------------------------
-        public async Task<(IEnumerable<Product> Items, long Total)> QueryAsync(string? q, string? category, decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
-        {
-            var builder = Builders<Product>.Filter;
-            var filters = new List<FilterDefinition<Product>>();
+            var filter = Builders<Product>.Filter.Empty;
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                // assume text index exists on relevant fields
-                filters.Add(builder.Text(q));
+                var nameFilter = Builders<Product>.Filter.Regex(p => p.Name, new BsonRegularExpression(q, "i"));
+                var descFilter = Builders<Product>.Filter.Regex(p => p.Description, new BsonRegularExpression(q, "i"));
+                filter &= Builders<Product>.Filter.Or(nameFilter, descFilter);
             }
 
             if (!string.IsNullOrWhiteSpace(category))
-                filters.Add(builder.Eq(p => p.Category, category));
-
-            if (minPrice.HasValue)
-                filters.Add(builder.Gte(p => p.Price, minPrice.Value));
-
-            if (maxPrice.HasValue)
-                filters.Add(builder.Lte(p => p.Price, maxPrice.Value));
-
-            var finalFilter = filters.Any() ? builder.And(filters) : builder.Empty;
-            var find = _col.Find(finalFilter);
-
-            if (!string.IsNullOrWhiteSpace(sort))
             {
-                switch (sort.ToLowerInvariant())
+                filter &= Builders<Product>.Filter.Eq(p => p.Category, category);
+            }
+
+            // only active and not deleted
+            filter &= Builders<Product>.Filter.Eq(p => p.IsActive, true) & Builders<Product>.Filter.Eq(p => p.IsDeleted, false);
+
+            var sortDef = sort == "latest"
+                ? Builders<Product>.Sort.Descending(p => p.CreatedAt)
+                : Builders<Product>.Sort.Descending(p => p.SalesCount);
+
+            var skip = Math.Max((page - 1) * pageSize, 0);
+
+            var total = await _col.CountDocumentsAsync(filter);
+            var products = await _col.Find(filter).Sort(sortDef).Skip(skip).Limit(pageSize).ToListAsync();
+
+            // Map products to ProductListItemDto
+            var items = products.Select(p =>
+            {
+                decimal price = p.Price;
+                if (p.CountryPrices != null && p.CountryPrices.Count > 0)
                 {
-                    case "best-sellers":
-                        find = find.SortByDescending(p => p.SalesCount);
-                        break;
-                    case "price-asc":
-                        find = find.SortBy(p => p.Price);
-                        break;
-                    case "price-desc":
-                        find = find.SortByDescending(p => p.Price);
-                        break;
-                    case "rating":
-                        find = find.SortByDescending(p => p.AverageRating);
-                        break;
-                    default:
-                        find = find.SortByDescending(p => p.IsFeatured);
-                        break;
+                    if (p.CountryPrices.TryGetValue("IN", out var inPrice))
+                        price = inPrice;
+                    else
+                        price = p.CountryPrices.Values.First();
                 }
-            }
-            else
-            {
-                find = find.SortByDescending(p => p.IsFeatured);
-            }
 
-            var total = await find.CountDocumentsAsync();
-            var items = await find.Skip((Math.Max(page, 1) - 1) * pageSize).Limit(pageSize).ToListAsync();
+                var images = p.Images?.Select(i => i.Url).ToList() ?? new List<string>();
+                var available = p.Variants != null && p.Variants.Any(v => v.Quantity > 0);
+
+                return new ProductListItemDto
+                {
+                    Id = p.Id ?? string.Empty,
+                    Name = p.Name,
+                    Price = price,
+                    Category = p.Category,
+                    Images = images,
+                    Available = available
+                };
+            }).ToList();
 
             return (items, total);
         }
 
-        // -------------------------
-        // Images & Reviews (add only)
-        // -------------------------
-        public async Task AddImageAsync(string productId, ProductImage image)
+        public async Task<Product?> GetByIdAsync(string id)
         {
-            if (string.IsNullOrWhiteSpace(productId)) throw new ArgumentNullException(nameof(productId));
-            if (image == null) throw new ArgumentNullException(nameof(image));
-
-            await _col.UpdateOneAsync(
-                p => p.Id == productId,
-                Builders<Product>.Update.Push(p => p.Images, image)
-            );
+            return await _col.Find(p => p.Id == id && p.IsActive && !p.IsDeleted).FirstOrDefaultAsync();
         }
 
-        public async Task AddReviewAsync(string productId, Review review)
+        public async Task CreateAsync(Product product)
         {
-            if (string.IsNullOrWhiteSpace(productId)) throw new ArgumentNullException(nameof(productId));
-            if (review == null) throw new ArgumentNullException(nameof(review));
-
-            // Ensure review has Id
-            if (string.IsNullOrWhiteSpace(review.Id))
-                review.Id = Guid.NewGuid().ToString();
-
-            await _col.UpdateOneAsync(
-                p => p.Id == productId,
-                Builders<Product>.Update.Push(p => p.Reviews, review)
-            );
-
-            // After insertion, recalc aggregates based on approved reviews only
-            await RecalculateAggregatesAsync(productId);
+            product.Id = string.IsNullOrWhiteSpace(product.Id) ? ObjectId.GenerateNewId().ToString() : product.Id;
+            product.CreatedAt = DateTime.UtcNow;
+            product.UpdatedAt = DateTime.UtcNow;
+            await _col.InsertOneAsync(product);
         }
 
-        // -------------------------
-        // Moderation
-        // -------------------------
-        public async Task<IEnumerable<PendingReview>> GetPendingReviewsAsync(int page = 1, int pageSize = 50)
+        public async Task UpdateAsync(Product product)
+        {
+            product.UpdatedAt = DateTime.UtcNow;
+            var res = await _col.ReplaceOneAsync(p => p.Id == product.Id, product);
+            if (res.MatchedCount == 0) throw new Exception("Product not found");
+        }
+
+        public async Task DeleteAsync(string id)
+        {
+            var update = Builders<Product>.Update.Set(p => p.IsDeleted, true).Set(p => p.IsActive, false).Set(p => p.UpdatedAt, DateTime.UtcNow);
+            await _col.UpdateOneAsync(p => p.Id == id, update);
+        }
+
+        public async Task AddImageAsync(string id, ProductImage image)
+        {
+            var update = Builders<Product>.Update.Push(p => p.Images, image).Set(p => p.UpdatedAt, DateTime.UtcNow);
+            await _col.UpdateOneAsync(p => p.Id == id, update);
+        }
+
+        public async Task<bool> RemoveImageAsync(string id, string keyOrUrl)
+        {
+            var update = Builders<Product>.Update.PullFilter(p => p.Images,
+                Builders<ProductImage>.Filter.Or(
+                    Builders<ProductImage>.Filter.Eq(img => img.Url, keyOrUrl),
+                    Builders<ProductImage>.Filter.Eq(img => img.ThumbnailUrl, keyOrUrl)
+                ) as FilterDefinition<ProductImage>);
+
+            var res = await _col.UpdateOneAsync(p => p.Id == id, update);
+            return res.ModifiedCount > 0;
+        }
+
+        public async Task AddReviewAsync(string id, Review review)
+        {
+            var update = Builders<Product>.Update
+                .Push(p => p.Reviews, review)
+                .Inc(p => p.ReviewCount, 1)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            await _col.UpdateOneAsync(p => p.Id == id, update);
+
+            // recompute approved-average
+            var product = await GetByIdAsync(id);
+            if (product != null)
+            {
+                var approved = product.Reviews?.Where(r => r.Approved).Select(r => r.Rating).ToList() ?? new List<int>();
+                var avg = approved.Count > 0 ? approved.Average() : 0.0;
+                var upd = Builders<Product>.Update.Set(p => p.AverageRating, avg);
+                await _col.UpdateOneAsync(p => p.Id == id, upd);
+            }
+        }
+
+        public async Task<List<CategoryCount>> GetCategoriesAsync()
+        {
+            var pipeline = new[]
+            {
+                new BsonDocument { { "$match", new BsonDocument { { "IsActive", true }, { "IsDeleted", false } } } },
+                new BsonDocument { { "$group", new BsonDocument { { "_id", "$Category" }, { "count", new BsonDocument("$sum", 1) } } } },
+                new BsonDocument { { "$project", new BsonDocument { { "Category", "$_id" }, { "Count", "$count" }, { "_id", 0 } } } }
+            };
+
+            var docs = await _col.Aggregate<BsonDocument>(pipeline).ToListAsync();
+
+            var result = docs.Select(d => new CategoryCount
+            {
+                Category = d.GetValue("Category").AsString,
+                Count = d.GetValue("Count").ToInt32()
+            }).ToList();
+
+            return result;
+        }
+
+        // Atomic variant decrement (safe reservation)
+        public async Task<bool> TryDecrementVariantQuantityAsync(string productId, string variantSku, int qty)
+        {
+            if (qty <= 0) return false;
+
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productId),
+                Builders<Product>.Filter.ElemMatch(p => p.Variants, v => v.Sku == variantSku && v.Quantity >= qty)
+            );
+
+            var update = Builders<Product>.Update
+                .Inc("Variants.$[v].Quantity", -qty)
+                .Inc(p => p.SalesCount, qty)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var arrayFilter = new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("v.Sku", variantSku));
+            var options = new UpdateOptions { ArrayFilters = new List<ArrayFilterDefinition> { arrayFilter } };
+
+            var result = await _col.UpdateOneAsync(filter, update, options);
+            return result.ModifiedCount > 0;
+        }
+
+        public async Task<bool> IncrementVariantQuantityAsync(string productId, string variantSku, int qty)
+        {
+            if (qty <= 0) return false;
+
+            var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
+            var update = Builders<Product>.Update
+                .Inc("Variants.$[v].Quantity", qty)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var arrayFilter = new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("v.Sku", variantSku));
+            var options = new UpdateOptions { ArrayFilters = new List<ArrayFilterDefinition> { arrayFilter } };
+
+            var result = await _col.UpdateOneAsync(filter, update, options);
+            return result.ModifiedCount > 0;
+        }
+
+        // -----------------------
+        // Review moderation
+        // -----------------------
+        public async Task<IEnumerable<Review>> GetPendingReviewsAsync(int page = 1, int pageSize = 50)
         {
             var filter = Builders<Product>.Filter.ElemMatch(p => p.Reviews, r => r.Approved == false);
-            var products = await _col.Find(filter).Skip(Math.Max(page - 1, 0) * pageSize).Limit(pageSize).ToListAsync();
+            var products = await _col.Find(filter).ToListAsync();
 
-            var pending = new List<PendingReview>();
+            // Extract unapproved reviews and do simple paging across the flattened list
+            var pending = new List<Review>();
             foreach (var p in products)
             {
                 if (p.Reviews == null) continue;
-                foreach (var r in p.Reviews.Where(x => !x.Approved))
+                pending.AddRange(p.Reviews.Where(r => !r.Approved).Select(r =>
                 {
-                    pending.Add(new PendingReview
+                    // ensure the review has a reference to product id (we can use Id in comment if needed)
+                    return new Review
                     {
-                        ProductId = p.Id,
-                        ProductName = p.Name,
-                        ReviewId = r.Id,
+                        Id = r.Id,
                         UserId = r.UserId,
                         Rating = r.Rating,
                         Comment = r.Comment,
-                        CreatedAt = r.CreatedAt
-                    });
-                }
+                        CreatedAt = r.CreatedAt,
+                        Approved = r.Approved
+                    };
+                }));
             }
-            return pending;
+
+            var skip = Math.Max((page - 1) * pageSize, 0);
+            return pending.Skip(skip).Take(pageSize).ToList();
         }
 
         public async Task<bool> ApproveReviewAsync(string productId, string reviewId)
         {
-            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(reviewId)) return false;
+            // Set the specific review's Approved = true using positional filtered update
+            var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
+            var update = Builders<Product>.Update.Set("Reviews.$[r].Approved", true);
+            var arrayFilter = new BsonDocumentArrayFilterDefinition<BsonDocument>(new BsonDocument("r.Id", reviewId));
+            var options = new UpdateOptions { ArrayFilters = new List<ArrayFilterDefinition> { arrayFilter } };
 
-            var filter = Builders<Product>.Filter.And(
-                Builders<Product>.Filter.Eq(p => p.Id, productId),
-                Builders<Product>.Filter.ElemMatch(p => p.Reviews, r => r.Id == reviewId)
-            );
+            var res = await _col.UpdateOneAsync(filter, update, options);
+            if (res.ModifiedCount > 0)
+            {
+                // recompute average rating
+                var product = await GetByIdAsync(productId);
+                if (product != null)
+                {
+                    var approved = product.Reviews?.Where(r => r.Approved).Select(r => r.Rating).ToList() ?? new List<int>();
+                    var avg = approved.Count > 0 ? approved.Average() : 0.0;
+                    var upd = Builders<Product>.Update.Set(p => p.AverageRating, avg);
+                    await _col.UpdateOneAsync(p => p.Id == productId, upd);
+                }
+                return true;
+            }
 
-            var update = Builders<Product>.Update.Set("Reviews.$.Approved", true);
-            var res = await _col.UpdateOneAsync(filter, update);
-
-            if (res.ModifiedCount == 0) return false;
-
-            await RecalculateAggregatesAsync(productId);
-            return true;
+            return false;
         }
 
         public async Task<bool> RejectReviewAsync(string productId, string reviewId)
         {
-            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(reviewId)) return false;
+            // Remove the review from the product
+            var update = Builders<Product>.Update.PullFilter(p => p.Reviews,
+                Builders<Review>.Filter.Eq(r => r.Id, reviewId) as FilterDefinition<Review>);
 
-            var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
-            var update = Builders<Product>.Update.PullFilter(p => p.Reviews, r => r.Id == reviewId);
-
-            var res = await _col.UpdateOneAsync(filter, update);
-            if (res.ModifiedCount == 0) return false;
-
-            await RecalculateAggregatesAsync(productId);
-            return true;
-        }
-
-        public async Task<bool> RemoveImageAsync(string productId, string imageUrlOrKey)
-        {
-            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(imageUrlOrKey)) return false;
-
-            // Remove image by matching Url field (or you can store/compare the key)
-            var update = Builders<Product>.Update.PullFilter(p => p.Images, img => img.Url == imageUrlOrKey);
             var res = await _col.UpdateOneAsync(p => p.Id == productId, update);
             return res.ModifiedCount > 0;
-        }
-
-        public async Task<IEnumerable<(string Category, long Count)>> GetCategoriesAsync()
-        {
-            var group = new BsonDocument
-    {
-        { "$group", new BsonDocument { { "_id", "$Category" }, { "count", new BsonDocument { { "$sum", 1 } } } } }
-    };
-
-            var sort = new BsonDocument
-    {
-        { "$sort", new BsonDocument { { "count", -1 } } }
-    };
-
-            var pipeline = new[] { group, sort };
-            var result = await _col.Aggregate<BsonDocument>(pipeline).ToListAsync();
-
-            return result.Select(b => (Category: b["_id"].AsString, Count: b["count"].AsInt64));
-        }
-
-        // -------------------------
-        // Helper: recompute review aggregates (only approved reviews)
-        // -------------------------
-        private async Task RecalculateAggregatesAsync(string productId)
-        {
-            var product = await _col.Find(p => p.Id == productId).FirstOrDefaultAsync();
-            if (product == null) return;
-
-            var approved = product.Reviews?.Where(r => r.Approved).ToList() ?? new List<Review>();
-            var count = approved.Count;
-            var avg = count > 0 ? approved.Average(r => r.Rating) : 0.0;
-
-            var update = Builders<Product>.Update
-                .Set(p => p.AverageRating, avg)
-                .Set(p => p.ReviewCount, count);
-
-            await _col.UpdateOneAsync(p => p.Id == productId, update);
         }
     }
 }

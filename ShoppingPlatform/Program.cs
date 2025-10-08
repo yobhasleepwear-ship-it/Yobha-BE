@@ -12,6 +12,7 @@ using ShoppingPlatform.Configurations;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services;
 using ShoppingPlatform.Controllers;
+using ShoppingPlatform.Middleware; // JwtMiddleware if you add it
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -27,7 +28,6 @@ var configuration = builder.Configuration;
 // ---------------------------
 // CORS - allowed origins read from config or fallback defaults
 // ---------------------------
-// Optional: you can add AllowedCorsOrigins array in appsettings.json to control production origins
 var allowedOrigins = configuration.GetSection("AllowedCorsOrigins").Get<string[]>()
                      ?? new[]
                      {
@@ -44,10 +44,9 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // enable only if you need cookies / credentials
+              .AllowCredentials();
     });
 
-    // Development-friendly policy: allow any loopback origin (keeps local dev easy)
     options.AddPolicy("AllowLocalhostLoopback", policy =>
     {
         policy.SetIsOriginAllowed(origin =>
@@ -66,12 +65,10 @@ builder.Services.AddCors(options =>
 // MongoDB
 // ---------------------------
 builder.Services.Configure<MongoDbSettings>(configuration.GetSection("Mongo"));
-var mongoSettings = configuration.GetSection("Mongo").Get<MongoDbSettings>()
-                    ?? new MongoDbSettings(); // fallback to default instance
+var mongoSettings = configuration.GetSection("Mongo").Get<MongoDbSettings>() ?? new MongoDbSettings();
 
 if (string.IsNullOrWhiteSpace(mongoSettings.ConnectionString))
 {
-    // Optional: throw or log an error in production if missing
     Console.WriteLine("Warning: Mongo connection string is empty. Ensure MONGO__CONNECTIONSTRING is set.");
 }
 
@@ -79,7 +76,7 @@ builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoSettings.C
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoSettings.DatabaseName));
 
 // ---------------------------
-// JWT
+// JWT settings + service
 // ---------------------------
 builder.Services.Configure<JwtSettings>(configuration.GetSection("Jwt"));
 var jwtSettings = configuration.GetSection("Jwt").Get<JwtSettings>() ?? new JwtSettings();
@@ -89,14 +86,24 @@ if (string.IsNullOrWhiteSpace(jwtSettings.Key))
     Console.WriteLine("Warning: JWT key empty. Set JWT__KEY in environment for production.");
 }
 
-// ---------------------------
-// Repositories & Services
-// ---------------------------
-builder.Services.AddSingleton<UserRepository>();
+// Register JwtService (keeps your existing class style). Use Singleton to reuse signing key across requests.
 builder.Services.AddSingleton<JwtService>();
-builder.Services.AddSingleton<ProductRepository>();
+
+// ---------------------------
+// Repositories & Services (concrete registrations as in your repo)
+// ---------------------------
+// Keep concrete classes as you previously used so compile doesn't require interfaces.
+builder.Services.AddSingleton<UserRepository>();
+builder.Services.AddSingleton<IProductRepository,ProductRepository>();
 builder.Services.AddSingleton<OtpRepository>();
 builder.Services.AddSingleton<InviteRepository>();
+builder.Services.AddSingleton<IWishlistRepository, WishlistRepository>();
+builder.Services.AddSingleton<ICartRepository, CartRepository>();
+builder.Services.AddSingleton<IOrderRepository, OrderRepository>();
+
+// Storage and SMS sender (concrete)
+builder.Services.AddSingleton<IStorageService, S3StorageService>();
+builder.Services.AddSingleton<ISmsSender, TwilioSmsSender>();
 
 // ---------------------------
 // Twilio (SMS)
@@ -107,7 +114,6 @@ if (twilioSettings is not null && !string.IsNullOrEmpty(twilioSettings.AccountSi
 {
     TwilioClient.Init(twilioSettings.AccountSid, twilioSettings.AuthToken);
 }
-builder.Services.AddSingleton<ISmsSender, TwilioSmsSender>();
 
 // ---------------------------
 // Google settings
@@ -120,14 +126,10 @@ builder.Services.Configure<GoogleSettings>(configuration.GetSection("Google"));
 builder.Services.Configure<AwsS3Settings>(configuration.GetSection("AwsS3"));
 var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
 
-// Create S3 client:
-// - If region specified, use it
-// - AWS SDK will use default credential chain (IAM role on EC2, env vars, shared credentials)
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
     var region = RegionEndpoint.GetBySystemName(awsSettings.Region);
 
-    // If access keys provided via config (not recommended for prod), create BasicAWSCredentials
     if (!string.IsNullOrEmpty(awsSettings.AccessKey) && !string.IsNullOrEmpty(awsSettings.SecretKey))
     {
         var creds = new BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
@@ -135,17 +137,13 @@ if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
     }
     else
     {
-        // Use default credentials (IAM role on EC2 preferred)
         builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(region));
     }
 }
 else
 {
-    // Fallback client (will use SDK defaults)
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client());
 }
-
-builder.Services.AddSingleton<IStorageService, S3StorageService>();
 
 // ---------------------------
 // HttpClient factory (for services that need it)
@@ -167,10 +165,10 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.RequireHttpsMetadata = !builder.Environment.IsDevelopment(); // require HTTPS unless in dev
+    options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
     options.SaveToken = true;
 
-    // If jwtSettings.Key is missing, avoid exception by using placeholder byte array (but log warning)
+    // Use configured key or fallback placeholder (warning already logged above)
     var key = string.IsNullOrEmpty(jwtSettings.Key) ? "ReplaceThisInEnvWithStrongKey" : jwtSettings.Key;
 
     options.TokenValidationParameters = new TokenValidationParameters
@@ -216,6 +214,9 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// ---------------------------
+// Build app
+// ---------------------------
 var app = builder.Build();
 
 // Swagger in dev
@@ -225,8 +226,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// IMPORTANT: UseCors should be before Authentication/Authorization and before MapControllers
-// Choose policy: in development allow localhost loopback, else allow configured web origins
+// Choose CORS policy
 if (app.Environment.IsDevelopment())
 {
     app.UseCors("AllowLocalhostLoopback");
@@ -240,6 +240,10 @@ app.UseHttpsRedirection();
 
 // Authentication must come before Authorization
 app.UseAuthentication();
+
+// Optional: Use JwtMiddleware (populates HttpContext.Items["UserId"]) — remove this line if you don't want it.
+app.UseMiddleware<JwtMiddleware>();
+
 app.UseAuthorization();
 
 app.MapControllers();

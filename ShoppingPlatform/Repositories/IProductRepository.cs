@@ -1,25 +1,35 @@
-﻿using System.Collections.Generic;
+﻿using ShoppingPlatform.Models;
+using ShoppingPlatform.Dto;
+using System.Collections.Generic;
 using System.Threading.Tasks;
-using ShoppingPlatform.Models;
 
 namespace ShoppingPlatform.Repositories
 {
     public interface IProductRepository
     {
+        // Query returns list of DTOs for listing and total count (for pagination)
+        Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,
+            decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort);
+
         Task<Product?> GetByIdAsync(string id);
-        Task<(IEnumerable<Product> Items, long Total)> QueryAsync(string? q, string? category, decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort);
         Task CreateAsync(Product product);
         Task UpdateAsync(Product product);
         Task DeleteAsync(string id);
-        Task AddImageAsync(string productId, ProductImage image);
-        Task AddReviewAsync(string productId, Review review);
 
-        // Moderation APIs
-        Task<IEnumerable<PendingReview>> GetPendingReviewsAsync(int page = 1, int pageSize = 50);
+        Task AddImageAsync(string id, ProductImage image);
+        Task<bool> RemoveImageAsync(string id, string keyOrUrl);
+
+        Task AddReviewAsync(string id, Review review);
+
+        Task<List<CategoryCount>> GetCategoriesAsync();
+
+        // Inventory helpers
+        Task<bool> TryDecrementVariantQuantityAsync(string productId, string variantSku, int qty);
+        Task<bool> IncrementVariantQuantityAsync(string productId, string variantSku, int qty);
+
+        // Admin review moderation helpers
+        Task<IEnumerable<Review>> GetPendingReviewsAsync(int page = 1, int pageSize = 50);
         Task<bool> ApproveReviewAsync(string productId, string reviewId);
         Task<bool> RejectReviewAsync(string productId, string reviewId);
-        Task<bool> RemoveImageAsync(string productId, string imageUrlOrKey);
-        Task<IEnumerable<(string Category, long Count)>> GetCategoriesAsync();
-
     }
 }
