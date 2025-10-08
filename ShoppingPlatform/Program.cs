@@ -125,14 +125,14 @@ builder.Services.Configure<GoogleSettings>(configuration.GetSection("Google"));
 // ---------------------------
 builder.Services.Configure<AwsS3Settings>(configuration.GetSection("AwsS3"));
 var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
-
+s
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
-    var region = RegionEndpoint.GetBySystemName(awsSettings.Region);
+    var region = Amazon.RegionEndpoint.GetBySystemName(awsSettings.Region);
 
     if (!string.IsNullOrEmpty(awsSettings.AccessKey) && !string.IsNullOrEmpty(awsSettings.SecretKey))
     {
-        var creds = new BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
+        var creds = new Amazon.Runtime.BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
         builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(creds, region));
     }
     else
@@ -144,6 +144,9 @@ else
 {
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client());
 }
+
+builder.Services.AddScoped<IS3Service, S3Service>();
+
 
 // ---------------------------
 // HttpClient factory (for services that need it)

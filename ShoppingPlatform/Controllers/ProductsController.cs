@@ -252,7 +252,7 @@ namespace ShoppingPlatform.Controllers
             var cats = await _repo.GetCategoriesAsync();
             return Ok(new ApiResponse<List<CategoryCount>> { Success = true, Message = "OK", Data = cats });
         }
+
     }
 
-    // Simple ApiResponse kept for compatibility with your other code.
 }
