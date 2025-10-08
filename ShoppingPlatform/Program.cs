@@ -125,7 +125,7 @@ builder.Services.Configure<GoogleSettings>(configuration.GetSection("Google"));
 // ---------------------------
 builder.Services.Configure<AwsS3Settings>(configuration.GetSection("AwsS3"));
 var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
-s
+
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
     var region = Amazon.RegionEndpoint.GetBySystemName(awsSettings.Region);
