@@ -4,6 +4,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using MongoDB.Driver;
 using Amazon;
+using Amazon.Runtime;
 using Amazon.S3;
 using Twilio;
 
@@ -13,40 +14,51 @@ using ShoppingPlatform.Services;
 using ShoppingPlatform.Controllers;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ---------------------------
+// Load configuration: JSON + environment variables
+// ---------------------------
+builder.Configuration
+       .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+       .AddEnvironmentVariables();
+
 var configuration = builder.Configuration;
 
 // ---------------------------
-// CORS - read allowed origins from config or use defaults for local dev
+// CORS - allowed origins read from config or fallback defaults
 // ---------------------------
+// Optional: you can add AllowedCorsOrigins array in appsettings.json to control production origins
 var allowedOrigins = configuration.GetSection("AllowedCorsOrigins").Get<string[]>()
                      ?? new[]
                      {
-                         "http://localhost:5173",   // common frontend dev port
+                         "https://www.yobha.in",
+                         "https://yobha-test-env.vercel.app",
+                         "http://localhost:5173",   // frontend dev port
                          "http://localhost:3000",
-                         "https://localhost:5001",  // swagger / other
-                         "https://localhost:7272"   // API itself
                      };
 
-
-// CORS - allow any localhost/loopback origin (dev only)
 builder.Services.AddCors(options =>
 {
+    options.AddPolicy("AllowWeb", policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials(); // enable only if you need cookies / credentials
+    });
+
+    // Development-friendly policy: allow any loopback origin (keeps local dev easy)
     options.AddPolicy("AllowLocalhostLoopback", policy =>
     {
-        policy
-            // Allow any localhost/127.0.0.1/[::1] origin (any port)
-            .SetIsOriginAllowed(origin =>
-            {
-                // make sure origin is a valid uri
-                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
-                    return false;
-
-                // Accept loopback addresses (localhost, 127.0.0.1, ::1)
-                return uri.IsLoopback;
-            })
-            .AllowAnyMethod()
-            .AllowAnyHeader();
-        // .AllowCredentials(); // be careful: only enable if you need cookies & you set explicit origins
+        policy.SetIsOriginAllowed(origin =>
+        {
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                return false;
+            return uri.IsLoopback;
+        })
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials();
     });
 });
 
@@ -54,7 +66,15 @@ builder.Services.AddCors(options =>
 // MongoDB
 // ---------------------------
 builder.Services.Configure<MongoDbSettings>(configuration.GetSection("Mongo"));
-var mongoSettings = configuration.GetSection("Mongo").Get<MongoDbSettings>()!;
+var mongoSettings = configuration.GetSection("Mongo").Get<MongoDbSettings>()
+                    ?? new MongoDbSettings(); // fallback to default instance
+
+if (string.IsNullOrWhiteSpace(mongoSettings.ConnectionString))
+{
+    // Optional: throw or log an error in production if missing
+    Console.WriteLine("Warning: Mongo connection string is empty. Ensure MONGO__CONNECTIONSTRING is set.");
+}
+
 builder.Services.AddSingleton<IMongoClient>(_ => new MongoClient(mongoSettings.ConnectionString));
 builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(mongoSettings.DatabaseName));
 
@@ -62,7 +82,12 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDat
 // JWT
 // ---------------------------
 builder.Services.Configure<JwtSettings>(configuration.GetSection("Jwt"));
-var jwtSettings = configuration.GetSection("Jwt").Get<JwtSettings>()!;
+var jwtSettings = configuration.GetSection("Jwt").Get<JwtSettings>() ?? new JwtSettings();
+
+if (string.IsNullOrWhiteSpace(jwtSettings.Key))
+{
+    Console.WriteLine("Warning: JWT key empty. Set JWT__KEY in environment for production.");
+}
 
 // ---------------------------
 // Repositories & Services
@@ -74,7 +99,7 @@ builder.Services.AddSingleton<OtpRepository>();
 builder.Services.AddSingleton<InviteRepository>();
 
 // ---------------------------
-// Twilio (SMS) - configuration + init
+// Twilio (SMS)
 // ---------------------------
 builder.Services.Configure<TwilioSettings>(configuration.GetSection("Twilio"));
 var twilioSettings = configuration.GetSection("Twilio").Get<TwilioSettings>();
@@ -94,15 +119,32 @@ builder.Services.Configure<GoogleSettings>(configuration.GetSection("Google"));
 // ---------------------------
 builder.Services.Configure<AwsS3Settings>(configuration.GetSection("AwsS3"));
 var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
+
+// Create S3 client:
+// - If region specified, use it
+// - AWS SDK will use default credential chain (IAM role on EC2, env vars, shared credentials)
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
     var region = RegionEndpoint.GetBySystemName(awsSettings.Region);
-    builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(region));
+
+    // If access keys provided via config (not recommended for prod), create BasicAWSCredentials
+    if (!string.IsNullOrEmpty(awsSettings.AccessKey) && !string.IsNullOrEmpty(awsSettings.SecretKey))
+    {
+        var creds = new BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
+        builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(creds, region));
+    }
+    else
+    {
+        // Use default credentials (IAM role on EC2 preferred)
+        builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(region));
+    }
 }
 else
 {
+    // Fallback client (will use SDK defaults)
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client());
 }
+
 builder.Services.AddSingleton<IStorageService, S3StorageService>();
 
 // ---------------------------
@@ -125,8 +167,12 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
-    options.RequireHttpsMetadata = false; // set true in production
+    options.RequireHttpsMetadata = !builder.Environment.IsDevelopment(); // require HTTPS unless in dev
     options.SaveToken = true;
+
+    // If jwtSettings.Key is missing, avoid exception by using placeholder byte array (but log warning)
+    var key = string.IsNullOrEmpty(jwtSettings.Key) ? "ReplaceThisInEnvWithStrongKey" : jwtSettings.Key;
+
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
@@ -134,7 +180,7 @@ builder.Services.AddAuthentication(options =>
         ValidateAudience = true,
         ValidAudience = jwtSettings.Audience,
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.Key)),
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(key)),
         ValidateLifetime = true,
     };
 });
@@ -179,10 +225,18 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
-
 // IMPORTANT: UseCors should be before Authentication/Authorization and before MapControllers
-app.UseCors("AllowLocalhostLoopback");
+// Choose policy: in development allow localhost loopback, else allow configured web origins
+if (app.Environment.IsDevelopment())
+{
+    app.UseCors("AllowLocalhostLoopback");
+}
+else
+{
+    app.UseCors("AllowWeb");
+}
+
+app.UseHttpsRedirection();
 
 // Authentication must come before Authorization
 app.UseAuthentication();
