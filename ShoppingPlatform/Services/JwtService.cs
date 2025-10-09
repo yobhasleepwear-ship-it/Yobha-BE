@@ -102,10 +102,11 @@ namespace ShoppingPlatform.Services
                 Token = Guid.NewGuid().ToString("N"),
                 IssuedAt = DateTime.UtcNow,
                 ExpiresAt = DateTime.UtcNow.AddDays(ttlDays),
-                Revoked = false,
+                RevokedAt = null,  // null means active
                 ReplacedBy = null
             };
         }
+
 
         // ---------- Validate access token and return ClaimsPrincipal (or null if invalid) ----------
         /// <summary>

@@ -73,9 +73,22 @@ builder.Services.Configure<JwtSettings>(configuration.GetSection("Jwt"));
 var jwtSettings = configuration.GetSection("Jwt").Get<JwtSettings>() ?? new JwtSettings();
 builder.Services.AddSingleton<JwtService>();
 
+// Defensive check/log for JWT config
+var cfgLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger("Startup");
+if (string.IsNullOrWhiteSpace(jwtSettings.Key) ||
+    string.IsNullOrWhiteSpace(jwtSettings.Issuer) ||
+    string.IsNullOrWhiteSpace(jwtSettings.Audience))
+{
+    cfgLogger.LogWarning("JWT settings appear incomplete. Ensure Jwt:Key, Jwt:Issuer, Jwt:Audience are set in configuration.");
+    // Optionally throw to fail-fast in environments where JWT must be configured:
+    // throw new InvalidOperationException("JWT is not configured properly.");
+}
+
 // ---------------------------
 // Repositories & Services
 // ---------------------------
+// Prefer registering interfaces for testability when available.
+// Note: Mongo-backed repositories are safe as singletons with IMongoDatabase.
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<IProductRepository, ProductRepository>();
 builder.Services.AddSingleton<OtpRepository>();
@@ -96,7 +109,8 @@ if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
     var creds = new Amazon.Runtime.BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
     builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(creds, region));
 }
-builder.Services.AddScoped<IS3Service, S3Service>();
+// Make IS3Service singleton to match IAmazonS3 (stateless)
+builder.Services.AddSingleton<IS3Service, S3Service>();
 
 // ---------------------------
 // TwoFactor SMS (2factor.in)
@@ -193,6 +207,23 @@ builder.Services.AddSwaggerGen(c =>
 // Build & Run
 // ---------------------------
 var app = builder.Build();
+
+// Ensure productId unique index at startup (idempotent)
+try
+{
+    var mongoDb = app.Services.GetRequiredService<IMongoDatabase>();
+    var products = mongoDb.GetCollection<ShoppingPlatform.Models.Product>("products");
+
+    var indexKeys = Builders<ShoppingPlatform.Models.Product>.IndexKeys.Ascending(p => p.ProductId);
+    var indexOptions = new CreateIndexOptions { Name = "ux_product_productId", Unique = true };
+    var model = new CreateIndexModel<ShoppingPlatform.Models.Product>(indexKeys, indexOptions);
+    products.Indexes.CreateOne(model);
+}
+catch (Exception ex)
+{
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    startupLogger.LogWarning(ex, "Failed to create unique index on products.productId. Ensure migration run to remove duplicates before enabling unique index.");
+}
 
 if (app.Environment.IsDevelopment())
 {

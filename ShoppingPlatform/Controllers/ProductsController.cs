@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.Dto;
+using ShoppingPlatform.Helpers;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services;
@@ -43,12 +44,22 @@ namespace ShoppingPlatform.Controllers
             [FromQuery] decimal? maxPrice = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20,
-            [FromQuery] string? sort = "latest")
+            [FromQuery] string? sort = "latest",
+            [FromQuery] string? country = null // optional filter (controller-level only)
+        )
         {
             if (page <= 0) page = 1;
             if (pageSize <= 0) pageSize = 20;
 
+            // Call the repository using the original signature you had earlier.
+            // Expectation: QueryAsync returns a tuple (List<ProductListItemDto> items, long total)
+            // If your repo returns different types, tell me exact signature and I'll update this.
             var (items, total) = await _repo.QueryAsync(q, category, minPrice, maxPrice, page, pageSize, sort);
+
+            // If your repository returns domain Product objects instead of DTOs, switch to:
+            // var (products, total) = await _repo.QueryAsync(...);
+            // var items = ProductMappings.ToListItemDtos(products, country);
+            // but since your repo originally returned DTOs, we map directly.
 
             var paged = new PagedResult<ProductListItemDto>
             {
@@ -77,17 +88,7 @@ namespace ShoppingPlatform.Controllers
                 return NotFound(notFound);
             }
 
-            var dto = new ProductDetailDto
-            {
-                Id = product.Id ?? string.Empty,
-                Name = product.Name,
-                Description = product.Description,
-                Images = product.Images ?? new List<ProductImage>(),
-                Variants = product.Variants ?? new List<ProductVariant>(),
-                Prices = product.CountryPrices ?? new Dictionary<string, decimal>(),
-                Colors = product.Variants?.Select(v => v.Color).Distinct().ToList() ?? new List<string>(),
-                VariantSkus = product.Variants?.Select(v => v.Sku).ToList() ?? new List<string>()
-            };
+            var dto = ProductMappings.ToDetailDto(product);
 
             var ok = ApiResponse<ProductDetailDto>.Ok(dto, "OK");
             return Ok(ok);
@@ -101,7 +102,28 @@ namespace ShoppingPlatform.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<ActionResult<ApiResponse<Product>>> Create([FromBody] Product product)
         {
+            // Validate mandatory productMainCategory
+            if (string.IsNullOrWhiteSpace(product.ProductMainCategory))
+            {
+                var bad = ApiResponse<Product>.Fail("productMainCategory is required", null, HttpStatusCode.BadRequest);
+                return BadRequest(bad);
+            }
+
+            // Ensure a fresh id (Mongo will generate one if null)
             product.Id = null;
+            product.CreatedAt = DateTime.UtcNow;
+            product.UpdatedAt = DateTime.UtcNow;
+
+            // Ensure price list item ids exist
+            if (product.PriceList != null)
+            {
+                foreach (var p in product.PriceList)
+                {
+                    if (string.IsNullOrWhiteSpace(p.Id))
+                        p.Id = Guid.NewGuid().ToString("N");
+                }
+            }
+
             await _repo.CreateAsync(product);
 
             var resp = ApiResponse<Product>.Created(product, "Product created");
@@ -123,7 +145,24 @@ namespace ShoppingPlatform.Controllers
                 return NotFound(notFound);
             }
 
+            if (string.IsNullOrWhiteSpace(updated.ProductMainCategory))
+            {
+                var bad = ApiResponse<object>.Fail("productMainCategory is required", null, HttpStatusCode.BadRequest);
+                return BadRequest(bad);
+            }
+
             updated.Id = id;
+            updated.UpdatedAt = DateTime.UtcNow;
+
+            if (updated.PriceList != null)
+            {
+                foreach (var p in updated.PriceList)
+                {
+                    if (string.IsNullOrWhiteSpace(p.Id))
+                        p.Id = Guid.NewGuid().ToString("N");
+                }
+            }
+
             await _repo.UpdateAsync(updated);
 
             var ok = ApiResponse<object>.Ok(null, "Product updated");
@@ -179,7 +218,9 @@ namespace ShoppingPlatform.Controllers
                 return NotFound(notFound);
             }
 
+            image.UploadedAt = DateTime.UtcNow;
             await _repo.AddImageAsync(id, image);
+
             var ok = ApiResponse<ProductImage>.Ok(image, "Image attached");
             return Ok(ok);
         }
@@ -194,6 +235,7 @@ namespace ShoppingPlatform.Controllers
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             review.UserId = userId;
             review.CreatedAt = DateTime.UtcNow;
+            review.Approved = false;
 
             await _repo.AddReviewAsync(id, review);
 

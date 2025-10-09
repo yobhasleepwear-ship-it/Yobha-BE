@@ -12,6 +12,13 @@ namespace ShoppingPlatform.Repositories
             decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort);
 
         Task<Product?> GetByIdAsync(string id);
+
+        // New: lookup by readable PID (e.g., PID2138282)
+        Task<Product?> GetByProductIdAsync(string productId);
+
+        // New: check if readable PID exists
+        Task<bool> ExistsByProductIdAsync(string productId);
+
         Task CreateAsync(Product product);
         Task UpdateAsync(Product product);
         Task DeleteAsync(string id);

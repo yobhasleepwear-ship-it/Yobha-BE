@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
@@ -13,6 +12,7 @@ using ShoppingPlatform.Helpers;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services;
+using Microsoft.Extensions.Configuration;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -53,19 +53,38 @@ namespace ShoppingPlatform.Controllers
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<object>>> RegisterUser([FromBody] RegisterUserDto dto)
         {
-            var existing = await _users.GetByEmailAsync(dto.Email);
-            if (existing is not null)
+            // normalize email & phone
+            var email = dto.Email?.Trim().ToLowerInvariant();
+            var phoneNormalized = PhoneHelper.Normalize(dto.PhoneNumber);
+
+            // check email uniqueness
+            var existingByEmail = await _users.GetByEmailAsync(email);
+            if (existingByEmail is not null)
             {
                 var resp = ApiResponse<string>.Fail("Email already registered", null, HttpStatusCode.Conflict);
                 return Conflict(resp);
             }
 
+            // if phone provided, check phone uniqueness
+            if (!string.IsNullOrEmpty(phoneNormalized))
+            {
+                var existingByPhone = await _users.GetByPhoneAsync(phoneNormalized);
+                if (existingByPhone is not null)
+                {
+                    var resp = ApiResponse<string>.Fail("Phone number already registered", null, HttpStatusCode.Conflict);
+                    return Conflict(resp);
+                }
+            }
+
             var user = new User
             {
-                Email = dto.Email,
+                Email = email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 Roles = new[] { "User" },
-                FullName = dto.FullName
+                FullName = dto.FullName,
+                PhoneNumber = string.IsNullOrWhiteSpace(phoneNormalized) ? null : phoneNormalized,
+                PhoneVerified = false,
+                CreatedAt = DateTime.UtcNow
             };
 
             await _users.CreateAsync(user);
@@ -172,8 +191,30 @@ namespace ShoppingPlatform.Controllers
                 return Unauthorized(resp);
             }
 
-            var token = _jwt.GenerateToken(user);
-            var data = new { token, expiresInMinutes = 60, user = new { user.Id, user.Email, user.FullName } };
+            // generate access token (existing behavior)
+            var accessToken = _jwt.GenerateToken(user);
+
+            // create refresh token and persist
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
+            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+
+            // record IP for token (best-effort)
+            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            user.AddRefreshToken(refreshToken);
+            user.LastLoginAt = DateTime.UtcNow;
+            await _users.UpdateAsync(user.Id!, user);
+
+            // set cookie (recommended for web clients) and also return token in body for mobile clients
+            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+            var data = new
+            {
+                token = accessToken,
+                expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
+                refreshToken = refreshToken.Token,
+                user = new { user.Id, user.Email, user.FullName }
+            };
             return Ok(ApiResponse<object>.Ok(data, "Login successful"));
         }
 
@@ -256,9 +297,19 @@ namespace ShoppingPlatform.Controllers
                     await _users.UpdateAsync(user.Id!, user);
                 }
 
-                // Generate JWT
-                var token = _jwt.GenerateToken(user);
-                var data = new { token, user = new { user.Id, user.PhoneNumber } };
+                // Generate JWT and refresh token
+                var accessToken = _jwt.GenerateToken(user);
+                var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd2) ? rd2 : 30;
+                var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+                refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+                user.AddRefreshToken(refreshToken);
+                user.LastLoginAt = DateTime.UtcNow;
+                await _users.UpdateAsync(user.Id!, user);
+
+                SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+                var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.PhoneNumber } };
 
                 return Ok(ApiResponse<object>.Ok(data, "OTP verified successfully"));
             }
@@ -348,11 +399,130 @@ namespace ShoppingPlatform.Controllers
                 }
             }
 
-            var token = _jwt.GenerateToken(user);
-            var data = new { token, user = new { user.Id, user.Email, user.FullName } };
+            // generate tokens
+            var accessToken = _jwt.GenerateToken(user);
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd3) ? rd3 : 30;
+            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            user.AddRefreshToken(refreshToken);
+            await _users.UpdateAsync(user.Id!, user);
+
+            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+            var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.Email, user.FullName } };
             return Ok(ApiResponse<object>.Ok(data, "Google login successful"));
         }
 
+
+        // -----------------------
+        // Refresh token endpoint
+        // -----------------------
+        [HttpPost("refresh-token")]
+        [AllowAnonymous]
+        public async Task<ActionResult<ApiResponse<object>>> RefreshToken([FromBody] RefreshRequest? body)
+        {
+            // prefer cookie, fall back to body
+            var token = Request.Cookies["refreshToken"] ?? body?.RefreshToken;
+            if (string.IsNullOrEmpty(token))
+            {
+                var resp = ApiResponse<string>.Fail("Refresh token is required", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            // find user by refresh token - ensure your UserRepository implements this
+            var user = await _users.GetByRefreshTokenAsync(token);
+            if (user is null)
+            {
+                var resp = ApiResponse<string>.Fail("Invalid refresh token", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            var existing = user.GetRefreshToken(token);
+            if (existing == null)
+            {
+                var resp = ApiResponse<string>.Fail("Refresh token not found", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            if (!existing.IsActive)
+            {
+                // token reuse or expired - revoke all tokens for this user as precaution
+                foreach (var t in user.RefreshTokens)
+                {
+                    if (t.IsActive)
+                        t.RevokedAt = DateTime.UtcNow;
+                }
+                await _users.UpdateAsync(user.Id!, user);
+
+                var resp = ApiResponse<string>.Fail("Refresh token is no longer active", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            // rotate refresh token
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd4) ? rd4 : 30;
+            var newRefresh = _jwt.GenerateRefreshToken(refreshDays);
+            newRefresh.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            // mark old token revoked and link replacedBy
+            existing.RevokedAt = DateTime.UtcNow;
+            existing.RevokedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            existing.ReplacedBy = newRefresh.Token;
+
+            user.AddRefreshToken(newRefresh);
+            // optional: user.PruneExpiredTokens();
+            await _users.UpdateAsync(user.Id!, user);
+
+            // new access token
+            var accessToken = _jwt.GenerateToken(user);
+
+            SetRefreshTokenCookie(newRefresh.Token, newRefresh.ExpiresAt);
+
+            var data = new { token = accessToken, refreshToken = newRefresh.Token, expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60" };
+            return Ok(ApiResponse<object>.Ok(data, "Token refreshed"));
+        }
+
+
+        // -----------------------
+        // Revoke refresh token (logout)
+        // -----------------------
+        [HttpPost("revoke-refresh-token")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<object>>> RevokeRefreshToken([FromBody] RevokeRequest req)
+        {
+            var token = req.RefreshToken ?? Request.Cookies["refreshToken"];
+            if (string.IsNullOrEmpty(token))
+            {
+                var resp = ApiResponse<string>.Fail("Token is required", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
+
+            var user = await _users.GetByRefreshTokenAsync(token);
+            if (user is null)
+            {
+                var resp = ApiResponse<string>.Fail("Token not found", null, HttpStatusCode.NotFound);
+                return NotFound(resp);
+            }
+
+            var existing = user.GetRefreshToken(token);
+            if (existing == null || !existing.IsActive)
+            {
+                var resp = ApiResponse<string>.Fail("Token already revoked or expired", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
+
+            existing.RevokedAt = DateTime.UtcNow;
+            existing.RevokedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            existing.RevokeReason = "revoked-by-user";
+
+            await _users.UpdateAsync(user.Id!, user);
+
+            // remove cookie if present
+            Response.Cookies.Delete("refreshToken");
+
+            var ok = ApiResponse<object>.Ok(null, "Token revoked");
+            return Ok(ok);
+        }
 
         // -----------------------
         // Me - protected
@@ -378,5 +548,34 @@ namespace ShoppingPlatform.Controllers
             var data = new { user.Id, user.Email, user.FullName, user.Roles };
             return Ok(ApiResponse<object>.Ok(data));
         }
+
+        // -----------------------
+        // Helper: set refresh token cookie
+        // -----------------------
+        private void SetRefreshTokenCookie(string token, DateTime expiresAt)
+        {
+            var cookieOptions = new Microsoft.AspNetCore.Http.CookieOptions
+            {
+                HttpOnly = true,
+                Expires = expiresAt,
+                Secure = true, // ensure HTTPS in production
+                SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
+                Path = "/"
+            };
+            Response.Cookies.Append("refreshToken", token, cookieOptions);
+        }
+    }
+
+    // -----------------------
+    // DTOs for refresh/revoke (keep or move to DTOs folder)
+    // -----------------------
+    public class RefreshRequest
+    {
+        public string? RefreshToken { get; set; }
+    }
+
+    public class RevokeRequest
+    {
+        public string? RefreshToken { get; set; }
     }
 }
