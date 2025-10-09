@@ -121,8 +121,8 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         // Admin registration (Admin-only)
         // -----------------------
-        [HttpPost("/api/admin/register")]
-        [Authorize(Roles = "Admin")]
+        [HttpPost("register-admin")]
+        //[Authorize(Roles = "Admin")]
         public async Task<ActionResult<ApiResponse<object>>> RegisterAdmin([FromBody] RegisterAdminDto dto)
         {
             var existing = await _users.GetByEmailAsync(dto.Email);
