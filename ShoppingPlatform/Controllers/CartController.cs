@@ -1,7 +1,10 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Collections.Generic;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Models;
+using ShoppingPlatform.Repositories;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -22,7 +25,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             var items = await _repo.GetForUserAsync(userId);
-            return Ok(new ApiResponse<IEnumerable<CartItem>> { Success = true, Message = "OK", Data = items });
+
+            var resp = ApiResponse<IEnumerable<CartItem>>.Ok(items, "OK");
+            return Ok(resp);
         }
 
         [HttpPost]
@@ -31,7 +36,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.AddOrUpdateAsync(userId, dto.ProductId, dto.VariantSku, dto.Quantity);
-            return Ok(new ApiResponse<object> { Success = true, Message = "Added/Updated" });
+
+            var resp = ApiResponse<object>.Ok(null, "Added/Updated");
+            return Ok(resp);
         }
 
         [HttpDelete("{id}")]
@@ -40,7 +47,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.RemoveAsync(userId, id);
-            return Ok(new ApiResponse<object> { Success = true, Message = "Removed" });
+
+            var resp = ApiResponse<object>.Ok(null, "Removed");
+            return Ok(resp);
         }
 
         [HttpDelete("clear")]
@@ -49,7 +58,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.ClearAsync(userId);
-            return Ok(new ApiResponse<object> { Success = true, Message = "Cleared cart" });
+
+            var resp = ApiResponse<object>.Ok(null, "Cleared cart");
+            return Ok(resp);
         }
     }
 }

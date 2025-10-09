@@ -16,9 +16,15 @@ namespace ShoppingPlatform.Models
         public string Description { get; set; } = string.Empty;
 
         // Base price (fallback)
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal Price { get; set; }
 
+        // --- taxonomy fields (simple strings, stored directly) ---
+        // Top-level category name (e.g., "Sleepwear")
         public string Category { get; set; } = string.Empty;
+
+        // Sub-category name (e.g., "Sleepwear Sets")
+        public string SubCategory { get; set; } = string.Empty;
 
         // Total stock can be the sum of variant quantities (optional convenience)
         public int Stock { get; set; } = 0;
@@ -63,6 +69,7 @@ namespace ShoppingPlatform.Models
         public int Quantity { get; set; } = 0;
 
         // optional: price override for this variant (per-country override supported separately)
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal? PriceOverride { get; set; }
 
         // optional images specific to this variant

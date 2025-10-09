@@ -1,4 +1,10 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using ShoppingPlatform.Configurations;
@@ -6,7 +12,6 @@ using ShoppingPlatform.Dto;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services;
-using System.IO;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -53,13 +58,7 @@ namespace ShoppingPlatform.Controllers
                 Items = items
             };
 
-            var response = new ApiResponse<PagedResult<ProductListItemDto>>
-            {
-                Success = true,
-                Message = "OK",
-                Data = paged
-            };
-
+            var response = ApiResponse<PagedResult<ProductListItemDto>>.Ok(paged, "OK");
             return Ok(response);
         }
 
@@ -74,12 +73,8 @@ namespace ShoppingPlatform.Controllers
             var product = await _repo.GetByIdAsync(id);
             if (product == null)
             {
-                return NotFound(new ApiResponse<ProductDetailDto>
-                {
-                    Success = false,
-                    Message = "Product not found",
-                    Data = null
-                });
+                var notFound = ApiResponse<ProductDetailDto>.Fail("Product not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFound);
             }
 
             var dto = new ProductDetailDto
@@ -94,12 +89,8 @@ namespace ShoppingPlatform.Controllers
                 VariantSkus = product.Variants?.Select(v => v.Sku).ToList() ?? new List<string>()
             };
 
-            return Ok(new ApiResponse<ProductDetailDto>
-            {
-                Success = true,
-                Message = "OK",
-                Data = dto
-            });
+            var ok = ApiResponse<ProductDetailDto>.Ok(dto, "OK");
+            return Ok(ok);
         }
 
         // -------------------------------------------
@@ -113,13 +104,7 @@ namespace ShoppingPlatform.Controllers
             product.Id = null;
             await _repo.CreateAsync(product);
 
-            var resp = new ApiResponse<Product>
-            {
-                Success = true,
-                Message = "Product created",
-                Data = product
-            };
-
+            var resp = ApiResponse<Product>.Created(product, "Product created");
             return CreatedAtAction(nameof(Get), new { id = product.Id }, resp);
         }
 
@@ -134,23 +119,15 @@ namespace ShoppingPlatform.Controllers
             var existing = await _repo.GetByIdAsync(id);
             if (existing == null)
             {
-                return NotFound(new ApiResponse<object>
-                {
-                    Success = false,
-                    Message = "Product not found",
-                    Data = null
-                });
+                var notFound = ApiResponse<object>.Fail("Product not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFound);
             }
 
             updated.Id = id;
             await _repo.UpdateAsync(updated);
 
-            return Ok(new ApiResponse<object>
-            {
-                Success = true,
-                Message = "Product updated",
-                Data = null
-            });
+            var ok = ApiResponse<object>.Ok(null, "Product updated");
+            return Ok(ok);
         }
 
         // -------------------------------------------
@@ -163,12 +140,8 @@ namespace ShoppingPlatform.Controllers
         {
             await _repo.DeleteAsync(id);
 
-            return Ok(new ApiResponse<object>
-            {
-                Success = true,
-                Message = "Product deleted",
-                Data = null
-            });
+            var ok = ApiResponse<object>.Ok(null, "Product deleted");
+            return Ok(ok);
         }
 
         // -------------------------------------------
@@ -179,18 +152,17 @@ namespace ShoppingPlatform.Controllers
         public ActionResult<ApiResponse<object>> PresignImage(string id, [FromQuery] string filename)
         {
             if (string.IsNullOrWhiteSpace(filename))
-                return BadRequest(new ApiResponse<object> { Success = false, Message = "Filename required" });
+            {
+                var bad = ApiResponse<object>.Fail("Filename required", null, HttpStatusCode.BadRequest);
+                return BadRequest(bad);
+            }
 
             var key = $"products/{id}/{Guid.NewGuid()}_{Path.GetFileName(filename)}";
             var uploadUrl = _s3.GetPreSignedUploadUrl(_aws.Bucket, key, TimeSpan.FromMinutes(10));
             var objectUrl = _s3.GetObjectUrl(_aws.Bucket, key);
 
-            return Ok(new ApiResponse<object>
-            {
-                Success = true,
-                Message = "Presigned URL created",
-                Data = new { uploadUrl, objectUrl, key }
-            });
+            var resp = ApiResponse<object>.Ok(new { uploadUrl, objectUrl, key }, "Presigned URL created");
+            return Ok(resp);
         }
 
         // -------------------------------------------
@@ -202,10 +174,14 @@ namespace ShoppingPlatform.Controllers
         {
             var product = await _repo.GetByIdAsync(id);
             if (product == null)
-                return NotFound(new ApiResponse<ProductImage> { Success = false, Message = "Product not found" });
+            {
+                var notFound = ApiResponse<ProductImage>.Fail("Product not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFound);
+            }
 
             await _repo.AddImageAsync(id, image);
-            return Ok(new ApiResponse<ProductImage> { Success = true, Message = "Image attached", Data = image });
+            var ok = ApiResponse<ProductImage>.Ok(image, "Image attached");
+            return Ok(ok);
         }
 
         // -------------------------------------------
@@ -220,7 +196,16 @@ namespace ShoppingPlatform.Controllers
             review.CreatedAt = DateTime.UtcNow;
 
             await _repo.AddReviewAsync(id, review);
-            return Accepted(new ApiResponse<object> { Success = true, Message = "Review submitted for moderation", Data = null });
+
+            var accepted = new ApiResponse<object>
+            {
+                Success = true,
+                Status = HttpStatusCode.Accepted,
+                Message = "Review submitted for moderation",
+                Data = null
+            };
+
+            return Accepted(accepted);
         }
 
         // -------------------------------------------
@@ -231,15 +216,22 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<object>>> DeleteImage(string id, [FromQuery] string keyOrUrl)
         {
             if (string.IsNullOrWhiteSpace(keyOrUrl))
-                return BadRequest(new ApiResponse<object> { Success = false, Message = "keyOrUrl required" });
+            {
+                var bad = ApiResponse<object>.Fail("keyOrUrl required", null, HttpStatusCode.BadRequest);
+                return BadRequest(bad);
+            }
 
             var bucket = string.IsNullOrEmpty(_aws.Bucket) ? _aws.BucketName : _aws.Bucket;
             var deletedFromS3 = await _s3.DeleteObjectAsync(bucket, keyOrUrl);
             var removed = await _repo.RemoveImageAsync(id, keyOrUrl);
             if (!removed)
-                return NotFound(new ApiResponse<object> { Success = false, Message = "Image not found in product" });
+            {
+                var notFound = ApiResponse<object>.Fail("Image not found in product", null, HttpStatusCode.NotFound);
+                return NotFound(notFound);
+            }
 
-            return Ok(new ApiResponse<object> { Success = true, Message = "Image removed", Data = new { s3Deleted = deletedFromS3 } });
+            var ok = ApiResponse<object>.Ok(new { s3Deleted = deletedFromS3 }, "Image removed");
+            return Ok(ok);
         }
 
         // -------------------------------------------
@@ -250,9 +242,8 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<List<CategoryCount>>>> GetCategories()
         {
             var cats = await _repo.GetCategoriesAsync();
-            return Ok(new ApiResponse<List<CategoryCount>> { Success = true, Message = "OK", Data = cats });
+            var ok = ApiResponse<List<CategoryCount>>.Ok(cats, "OK");
+            return Ok(ok);
         }
-
     }
-
 }

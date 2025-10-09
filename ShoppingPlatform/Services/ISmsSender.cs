@@ -2,7 +2,10 @@
 {
     public interface ISmsSender
     {
-        Task SendSmsAsync(string toPhoneNumber, string message);
-    }
+        // Send OTP and get a session ID (used for verification)
+        Task<string> SendOtpAsync(string toPhoneNumber);
 
+        // Verify OTP using sessionId and otp entered by user
+        Task<bool> VerifyOtpAsync(string sessionId, string otp);
+    }
 }

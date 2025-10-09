@@ -1,7 +1,12 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Models;
+using ShoppingPlatform.Repositories;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -29,7 +34,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             var list = await _orderRepo.GetForUserAsync(userId);
-            return Ok(new ApiResponse<IEnumerable<Order>> { Success = true, Message = "OK", Data = list });
+
+            var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
+            return Ok(response);
         }
 
         // -------------------------------------------
@@ -41,9 +48,13 @@ namespace ShoppingPlatform.Controllers
         {
             var order = await _orderRepo.GetByIdAsync(id);
             if (order == null)
-                return NotFound(new ApiResponse<Order> { Success = false, Message = "Order not found" });
+            {
+                var notFoundResponse = ApiResponse<Order>.Fail("Order not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFoundResponse);
+            }
 
-            return Ok(new ApiResponse<Order> { Success = true, Message = "OK", Data = order });
+            var response = ApiResponse<Order>.Ok(order, "Order fetched successfully");
+            return Ok(response);
         }
 
         // -------------------------------------------
@@ -59,7 +70,10 @@ namespace ShoppingPlatform.Controllers
             // Get the user's cart
             var cartItems = await _cartRepo.GetForUserAsync(userId);
             if (!cartItems.Any())
-                return BadRequest(new ApiResponse<Order> { Success = false, Message = "Cart is empty" });
+            {
+                var badResponse = ApiResponse<Order>.Fail("Cart is empty", null, HttpStatusCode.BadRequest);
+                return BadRequest(badResponse);
+            }
 
             // Build order items with price snapshot
             var orderItems = new List<OrderItem>();
@@ -106,12 +120,8 @@ namespace ShoppingPlatform.Controllers
             // Optionally clear the cart
             await _cartRepo.ClearAsync(userId);
 
-            return CreatedAtAction(nameof(Get), new { id = created.Id }, new ApiResponse<Order>
-            {
-                Success = true,
-                Message = "Order created successfully",
-                Data = created
-            });
+            var createdResponse = ApiResponse<Order>.Created(created, "Order created successfully");
+            return CreatedAtAction(nameof(Get), new { id = created.Id }, createdResponse);
         }
 
         // -------------------------------------------
@@ -124,9 +134,13 @@ namespace ShoppingPlatform.Controllers
         {
             var updated = await _orderRepo.UpdateStatusAsync(id, status);
             if (!updated)
-                return NotFound(new ApiResponse<object> { Success = false, Message = "Order not found" });
+            {
+                var notFoundResponse = ApiResponse<object>.Fail("Order not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFoundResponse);
+            }
 
-            return Ok(new ApiResponse<object> { Success = true, Message = "Status updated" });
+            var response = ApiResponse<object>.Ok(null, "Status updated successfully");
+            return Ok(response);
         }
     }
 }

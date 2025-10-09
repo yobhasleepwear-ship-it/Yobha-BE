@@ -1,5 +1,11 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 
@@ -20,20 +26,31 @@ namespace ShoppingPlatform.Controllers
         }
 
         [HttpPost("MakeAdmin/{email}")]
-        public async Task<IActionResult> MakeAdmin(string email, [FromServices] UserRepository users)
+        public async Task<ActionResult<ApiResponse<object>>> MakeAdmin(string email, [FromServices] UserRepository users)
         {
             var user = await users.GetByEmailAsync(email);
-            if (user is null) return NotFound();
+            if (user is null)
+            {
+                var resp = ApiResponse<string>.Fail("User not found", null, HttpStatusCode.NotFound);
+                return NotFound(resp);
+            }
 
             user.Roles = user.Roles.Concat(new[] { "Admin" }).Distinct().ToArray();
             await users.UpdateAsync(user.Id!, user);
-            return Ok(user);
+
+            var data = new { user.Id, user.Email, user.Roles };
+            var success = ApiResponse<object>.Ok(data, "User promoted to Admin");
+            return Ok(success);
         }
 
         [HttpPost("seed/products")]
-        public async Task<IActionResult> SeedProducts([FromQuery] int count = 10)
+        public async Task<ActionResult<ApiResponse<object>>> SeedProducts([FromQuery] int count = 10)
         {
-            if (count <= 0 || count > 500) return BadRequest("count must be 1..500");
+            if (count <= 0 || count > 500)
+            {
+                var resp = ApiResponse<string>.Fail("count must be between 1 and 500", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
 
             var rnd = new Random();
             var created = new List<Product>();
@@ -60,7 +77,9 @@ namespace ShoppingPlatform.Controllers
                 created.Add(p);
             }
 
-            return Ok(new { seeded = created.Count });
+            var result = new { seeded = created.Count };
+            var ok = ApiResponse<object>.Ok(result, "Products seeded");
+            return Ok(ok);
         }
     }
 }

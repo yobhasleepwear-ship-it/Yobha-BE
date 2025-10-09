@@ -1,7 +1,10 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Collections.Generic;
+using System.Net;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Models;
+using ShoppingPlatform.Repositories;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -23,7 +26,8 @@ namespace ShoppingPlatform.Controllers
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             var list = await _repo.GetForUserAsync(userId);
 
-            return Ok(new ApiResponse<IEnumerable<Wishlist>> { Success = true, Message = "OK", Data = list });
+            var response = ApiResponse<IEnumerable<Wishlist>>.Ok(list, "OK");
+            return Ok(response);
         }
 
         [HttpPost("{productId}")]
@@ -32,7 +36,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.AddAsync(userId, productId);
-            return Ok(new ApiResponse<object> { Success = true, Message = "Added to wishlist" });
+
+            var response = ApiResponse<object>.Ok(null, "Added to wishlist");
+            return Ok(response);
         }
 
         [HttpDelete("{productId}")]
@@ -41,7 +47,9 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.RemoveAsync(userId, productId);
-            return Ok(new ApiResponse<object> { Success = true, Message = "Removed from wishlist" });
+
+            var response = ApiResponse<object>.Ok(null, "Removed from wishlist");
+            return Ok(response);
         }
     }
 }

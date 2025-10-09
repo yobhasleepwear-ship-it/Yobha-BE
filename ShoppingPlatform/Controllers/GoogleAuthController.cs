@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -53,7 +53,7 @@ namespace ShoppingPlatform.Controllers
         /// </summary>
         [HttpGet("google/redirect")]
         [AllowAnonymous]
-        public IActionResult GoogleRedirect([FromQuery] string? returnUrl)
+        public ActionResult<ApiResponse<object>> GoogleRedirect([FromQuery] string? returnUrl)
         {
             var stateObj = new { nonce = Guid.NewGuid().ToString("N"), returnUrl };
             var stateJson = JsonSerializer.Serialize(stateObj);
@@ -75,9 +75,10 @@ namespace ShoppingPlatform.Controllers
 
 #if DEBUG
             // In dev return the URL so Swagger can show it (copy-paste into new tab)
-            return Ok(new { url });
+            return Ok(ApiResponse<object>.Ok(new { url }, "Google auth URL"));
 #else
-    return Redirect(url);
+            // In production redirect the browser to Google consent screen
+            return Redirect(url);
 #endif
         }
 
@@ -88,10 +89,13 @@ namespace ShoppingPlatform.Controllers
         /// </summary>
         [HttpGet("google/callback")]
         [AllowAnonymous]
-        public async Task<IActionResult> GoogleCallback([FromQuery] string code, [FromQuery] string state)
+        public async Task<ActionResult<ApiResponse<object>>> GoogleCallback([FromQuery] string code, [FromQuery] string state)
         {
             if (string.IsNullOrEmpty(code))
-                return BadRequest(new { message = "Missing code" });
+            {
+                var resp = ApiResponse<string>.Fail("Missing code", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
 
             // Decode state and optionally read returnUrl (you should also validate state/nonce in production)
             string? returnUrl = null;
@@ -117,18 +121,41 @@ namespace ShoppingPlatform.Controllers
                 ["grant_type"] = "authorization_code"
             };
 
-            var tokenResponse = await http.PostAsync(_googleSettings.TokenUri, new FormUrlEncodedContent(form!));
+            HttpResponseMessage tokenResponse;
+            try
+            {
+                tokenResponse = await http.PostAsync(_googleSettings.TokenUri, new FormUrlEncodedContent(form!));
+            }
+            catch (Exception ex)
+            {
+                var resp = ApiResponse<string>.Fail("Token exchange failed", new List<string> { ex.Message }, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
+
             if (!tokenResponse.IsSuccessStatusCode)
             {
                 var err = await tokenResponse.Content.ReadAsStringAsync();
-                return BadRequest(new { message = "Token exchange failed", details = err });
+                var resp = ApiResponse<string>.Fail("Token exchange failed", new List<string> { err }, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
             }
 
             var tokenJson = await tokenResponse.Content.ReadAsStringAsync();
-            var tokenDoc = JsonSerializer.Deserialize<JsonElement>(tokenJson);
+            JsonElement tokenDoc;
+            try
+            {
+                tokenDoc = JsonSerializer.Deserialize<JsonElement>(tokenJson);
+            }
+            catch (Exception ex)
+            {
+                var resp = ApiResponse<string>.Fail("Invalid token response from Google", new List<string> { ex.Message }, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
 
             if (!tokenDoc.TryGetProperty("id_token", out var idTokenElem))
-                return BadRequest(new { message = "id_token not returned by Google" });
+            {
+                var resp = ApiResponse<string>.Fail("id_token not returned by Google", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
 
             var idToken = idTokenElem.GetString();
             var accessToken = tokenDoc.TryGetProperty("access_token", out var at) ? at.GetString() : null;
@@ -144,11 +171,34 @@ namespace ShoppingPlatform.Controllers
             }
             catch (InvalidJwtException ex)
             {
-                return Unauthorized(new { message = "Invalid id_token", detail = ex.Message });
+                var resp = ApiResponse<string>.Fail("Invalid id_token: " + ex.Message, null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
             }
             catch (Exception ex)
             {
-                return Unauthorized(new { message = "id_token validation failed", detail = ex.Message });
+                var resp = ApiResponse<string>.Fail("id_token validation failed: " + ex.Message, null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            // basic checks
+            if (payload == null || string.IsNullOrEmpty(payload.Email))
+            {
+                var resp = ApiResponse<string>.Fail("Google token missing email", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            // optional but recommended: require email verified
+            if (payload.EmailVerified != true)
+            {
+                var resp = ApiResponse<string>.Fail("Google account email not verified", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
+
+            // optional: explicit issuer check (extra safety)
+            if (payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com")
+            {
+                var resp = ApiResponse<string>.Fail("Invalid token issuer", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
             }
 
             // Upsert user and issue your JWT
@@ -174,7 +224,6 @@ namespace ShoppingPlatform.Controllers
                 if (!already)
                 {
                     user.Providers.Add(new ProviderInfo { Provider = "Google", ProviderId = payload.Subject });
-                    // update email verified flag if present
                     if (payload.EmailVerified == true)
                         user.EmailVerified = true;
 
@@ -184,8 +233,14 @@ namespace ShoppingPlatform.Controllers
 
             var jwt = _jwt.GenerateToken(user);
 
-            // Return JSON (or set cookie + redirect if you prefer)
-            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName }, returnUrl });
+            var respData = new
+            {
+                token = jwt,
+                user = new { user.Id, user.Email, user.FullName },
+                returnUrl
+            };
+
+            return Ok(ApiResponse<object>.Ok(respData, "Google callback successful"));
         }
     }
 }

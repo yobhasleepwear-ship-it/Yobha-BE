@@ -1,10 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
+using Google.Apis.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
-using Google.Apis.Auth;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Helpers;
@@ -49,11 +51,14 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         [HttpPost("register-user")]
         [AllowAnonymous]
-        public async Task<IActionResult> RegisterUser([FromBody] RegisterUserDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> RegisterUser([FromBody] RegisterUserDto dto)
         {
             var existing = await _users.GetByEmailAsync(dto.Email);
             if (existing is not null)
-                return Conflict(new { message = "Email already registered" });
+            {
+                var resp = ApiResponse<string>.Fail("Email already registered", null, HttpStatusCode.Conflict);
+                return Conflict(resp);
+            }
 
             var user = new User
             {
@@ -64,7 +69,9 @@ namespace ShoppingPlatform.Controllers
             };
 
             await _users.CreateAsync(user);
-            return CreatedAtAction(nameof(RegisterUser), new { id = user.Id }, new { user.Id, user.Email });
+
+            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "User created");
+            return CreatedAtAction(nameof(RegisterUser), new { id = user.Id }, body);
         }
 
         // -----------------------
@@ -72,15 +79,19 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         [HttpPost("/api/admin/register")]
         [Authorize(Roles = "Admin")]
-        public async Task<IActionResult> RegisterAdmin([FromBody] RegisterAdminDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> RegisterAdmin([FromBody] RegisterAdminDto dto)
         {
             var existing = await _users.GetByEmailAsync(dto.Email);
             if (existing is not null)
             {
                 if (existing.Roles?.Contains("Admin") == true)
-                    return Conflict(new { message = "Email already registered as Admin." });
+                {
+                    var resp = ApiResponse<string>.Fail("Email already registered as Admin.", null, HttpStatusCode.Conflict);
+                    return Conflict(resp);
+                }
 
-                return Conflict(new { message = "Email already registered as User. Admin creation for existing User is not allowed." });
+                var resp2 = ApiResponse<string>.Fail("Email already registered as User. Admin creation for existing User is not allowed.", null, HttpStatusCode.Conflict);
+                return Conflict(resp2);
             }
 
             var user = new User
@@ -92,7 +103,9 @@ namespace ShoppingPlatform.Controllers
             };
 
             await _users.CreateAsync(user);
-            return CreatedAtAction(nameof(RegisterAdmin), new { id = user.Id }, new { user.Id, user.Email });
+
+            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "Admin created");
+            return CreatedAtAction(nameof(RegisterAdmin), new { id = user.Id }, body);
         }
 
         // -----------------------
@@ -100,19 +113,29 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         [HttpPost("bootstrap-admin")]
         [AllowAnonymous]
-        public async Task<IActionResult> BootstrapAdmin([FromBody] BootstrapAdminDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> BootstrapAdmin([FromBody] BootstrapAdminDto dto)
         {
             var configured = _config["InitialAdminSecret"];
             if (string.IsNullOrEmpty(configured) || dto.Secret != configured)
-                return Forbid();
+            {
+                var resp = ApiResponse<string>.Fail("Forbidden", null, HttpStatusCode.Forbidden);
+                // Forbid() result does not accept body easily; return status with body
+                return StatusCode((int)HttpStatusCode.Forbidden, resp);
+            }
 
             var all = await _users.GetAllAsync();
             if (all.Any(u => u.Roles.Contains("Admin")))
-                return BadRequest(new { message = "Admin already exists. Bootstrap not allowed." });
+            {
+                var resp = ApiResponse<string>.Fail("Admin already exists. Bootstrap not allowed.", null, HttpStatusCode.BadRequest);
+                return BadRequest(resp);
+            }
 
             var existing = await _users.GetByEmailAsync(dto.Email);
             if (existing is not null)
-                return Conflict(new { message = "Email already registered." });
+            {
+                var resp = ApiResponse<string>.Fail("Email already registered.", null, HttpStatusCode.Conflict);
+                return Conflict(resp);
+            }
 
             var user = new User
             {
@@ -123,7 +146,9 @@ namespace ShoppingPlatform.Controllers
             };
 
             await _users.CreateAsync(user);
-            return CreatedAtAction(nameof(BootstrapAdmin), new { id = user.Id }, new { user.Id, user.Email });
+
+            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "Admin created");
+            return CreatedAtAction(nameof(BootstrapAdmin), new { id = user.Id }, body);
         }
 
         // -----------------------
@@ -131,101 +156,126 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         [HttpPost("login")]
         [AllowAnonymous]
-        public async Task<IActionResult> Login([FromBody] LoginDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> Login([FromBody] LoginDto dto)
         {
             var user = await _users.GetByEmailAsync(dto.Email);
-            if (user is null) return Unauthorized(new { message = "Invalid credentials" });
+            if (user is null)
+            {
+                var resp = ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             var valid = BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash);
-            if (!valid) return Unauthorized(new { message = "Invalid credentials" });
+            if (!valid)
+            {
+                var resp = ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             var token = _jwt.GenerateToken(user);
-            return Ok(new { token, expiresInMinutes = 60, user = new { user.Id, user.Email, user.FullName } });
+            var data = new { token, expiresInMinutes = 60, user = new { user.Id, user.Email, user.FullName } };
+            return Ok(ApiResponse<object>.Ok(data, "Login successful"));
         }
 
         // -----------------------
-        // Send OTP
+        // Send OTP (using 2Factor)
         // -----------------------
         [HttpPost("send-otp")]
         [AllowAnonymous]
-        public async Task<IActionResult> SendOtp([FromBody] SendOtpDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> SendOtp([FromBody] SendOtpDto dto)
         {
-            var last = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
-            if (last != null && last.CreatedAt.AddSeconds(60) > DateTime.UtcNow)
-                return BadRequest(new { message = "OTP recently sent. Try again later." });
-
-            var otp = OtpHelper.GenerateNumericOtp(6);
-            var tuple = OtpHelper.HashOtp(otp);
-            var hash = tuple.hashed;
-            var salt = tuple.salt;
-
-            var entry = new OtpEntry
+            try
             {
-                PhoneNumber = dto.PhoneNumber,
-                OtpHash = hash,
-                Salt = salt,
-                ExpiresAt = DateTime.UtcNow.AddMinutes(5),
-                CreatedAt = DateTime.UtcNow
-            };
+                // Call the new 2Factor-based SMS service
+                var sessionId = await _sms.SendOtpAsync(dto.PhoneNumber);
 
-            await _otps.CreateAsync(entry);
+                // (Optional) Save sessionId for verification tracking in DB
+                var entry = new OtpEntry
+                {
+                    PhoneNumber = dto.PhoneNumber,
+                    SessionId = sessionId,
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+                };
+                await _otps.CreateAsync(entry);
 
-            var message = $"Your verification code is {otp}. It will expire in 5 minutes.";
-            await _sms.SendSmsAsync(dto.PhoneNumber, message);
-
-            return Ok(new { message = "OTP sent" });
+                var data = new { sessionId };
+                return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
+            }
+            catch (Exception ex)
+            {
+                var resp = ApiResponse<string>.Fail($"Failed to send OTP: {ex.Message}", null, HttpStatusCode.InternalServerError);
+                return StatusCode((int)HttpStatusCode.InternalServerError, resp);
+            }
         }
 
         // -----------------------
-        // Verify OTP
+        // Verify OTP (using 2Factor)
         // -----------------------
         [HttpPost("verify-otp")]
         [AllowAnonymous]
-        public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> VerifyOtp([FromBody] VerifyOtpDto dto)
         {
-            var entry = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
-            if (entry is null) return BadRequest(new { message = "No OTP found. Request a new one." });
-            if (entry.Used) return BadRequest(new { message = "OTP already used." });
-            if (entry.ExpiresAt < DateTime.UtcNow) return BadRequest(new { message = "OTP expired." });
-            if (entry.Attempts >= 5) return BadRequest(new { message = "Too many attempts." });
-
-            if (!OtpHelper.VerifyOtp(dto.Otp, entry.Salt, entry.OtpHash))
+            try
             {
-                entry.Attempts++;
-                await _otps.IncrementAttemptsAsync(entry.Id!, entry.Attempts);
-                return Unauthorized(new { message = "Invalid OTP" });
-            }
-
-            await _otps.MarkUsedAsync(entry.Id!);
-
-            var user = await _users.GetByPhoneAsync(dto.PhoneNumber);
-            if (user is null)
-            {
-                user = new User
+                var entry = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
+                if (entry is null)
                 {
-                    PhoneNumber = dto.PhoneNumber,
-                    PhoneVerified = true,
-                    Roles = new[] { "User" },
-                    CreatedAt = DateTime.UtcNow
-                };
-                await _users.CreateAsync(user);
-            }
-            else if (!user.PhoneVerified)
-            {
-                user.PhoneVerified = true;
-                await _users.UpdateAsync(user.Id!, user);
-            }
+                    var resp = ApiResponse<string>.Fail("OTP not found or expired. Request a new one.", null, HttpStatusCode.BadRequest);
+                    return BadRequest(resp);
+                }
 
-            var token = _jwt.GenerateToken(user);
-            return Ok(new { token, user = new { user.Id, user.PhoneNumber } });
+                // Verify OTP with 2Factor API
+                var verified = await _sms.VerifyOtpAsync(entry.SessionId!, dto.Otp);
+
+                if (!verified)
+                {
+                    var resp = ApiResponse<string>.Fail("Invalid or expired OTP.", null, HttpStatusCode.Unauthorized);
+                    return Unauthorized(resp);
+                }
+
+                // Mark entry used (optional)
+                await _otps.MarkUsedAsync(entry.Id!);
+
+                // Find or create user
+                var user = await _users.GetByPhoneAsync(dto.PhoneNumber);
+                if (user is null)
+                {
+                    user = new User
+                    {
+                        PhoneNumber = dto.PhoneNumber,
+                        PhoneVerified = true,
+                        Roles = new[] { "User" },
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    await _users.CreateAsync(user);
+                }
+                else if (!user.PhoneVerified)
+                {
+                    user.PhoneVerified = true;
+                    await _users.UpdateAsync(user.Id!, user);
+                }
+
+                // Generate JWT
+                var token = _jwt.GenerateToken(user);
+                var data = new { token, user = new { user.Id, user.PhoneNumber } };
+
+                return Ok(ApiResponse<object>.Ok(data, "OTP verified successfully"));
+            }
+            catch (Exception ex)
+            {
+                var resp = ApiResponse<string>.Fail($"OTP verification failed: {ex.Message}", null, HttpStatusCode.InternalServerError);
+                return StatusCode((int)HttpStatusCode.InternalServerError, resp);
+            }
         }
+
 
         // -----------------------
         // Google login
         // -----------------------
         [HttpPost("google")]
         [AllowAnonymous]
-        public async Task<IActionResult> GoogleLogin([FromBody] GoogleLoginDto dto)
+        public async Task<ActionResult<ApiResponse<object>>> GoogleLogin([FromBody] GoogleLoginDto dto)
         {
             GoogleJsonWebSignature.Payload payload;
             try
@@ -238,20 +288,30 @@ namespace ShoppingPlatform.Controllers
             catch (Google.Apis.Auth.InvalidJwtException)
             {
                 // token invalid / signature failure / expired
-                return Unauthorized(new { message = "Invalid or expired Google token" });
+                var resp = ApiResponse<string>.Fail("Invalid or expired Google token", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
             }
 
             // basic checks
             if (payload == null || string.IsNullOrEmpty(payload.Email))
-                return Unauthorized(new { message = "Google token missing email" });
+            {
+                var resp = ApiResponse<string>.Fail("Google token missing email", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             // optional but recommended: require email verified
             if (payload.EmailVerified != true)
-                return Unauthorized(new { message = "Google account email not verified" });
+            {
+                var resp = ApiResponse<string>.Fail("Google account email not verified", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             // optional: explicit issuer check (extra safety)
             if (payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com")
-                return Unauthorized(new { message = "Invalid token issuer" });
+            {
+                var resp = ApiResponse<string>.Fail("Invalid token issuer", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             // now upsert user
             var user = await _users.GetByEmailAsync(payload.Email);
@@ -263,8 +323,8 @@ namespace ShoppingPlatform.Controllers
                     Email = payload.Email,
                     FullName = payload.Name,
                     Providers = new System.Collections.Generic.List<ProviderInfo> {
-                new ProviderInfo { Provider = "Google", ProviderId = payload.Subject }
-            },
+                        new ProviderInfo { Provider = "Google", ProviderId = payload.Subject }
+                    },
                     Roles = new[] { "User" },
                     CreatedAt = DateTime.UtcNow,
                     EmailVerified = payload.EmailVerified // if you have this field on User
@@ -289,7 +349,8 @@ namespace ShoppingPlatform.Controllers
             }
 
             var token = _jwt.GenerateToken(user);
-            return Ok(new { token, user = new { user.Id, user.Email, user.FullName } });
+            var data = new { token, user = new { user.Id, user.Email, user.FullName } };
+            return Ok(ApiResponse<object>.Ok(data, "Google login successful"));
         }
 
 
@@ -298,15 +359,24 @@ namespace ShoppingPlatform.Controllers
         // -----------------------
         [HttpGet("me")]
         [Authorize]
-        public async Task<IActionResult> Me()
+        public async Task<ActionResult<ApiResponse<object>>> Me()
         {
             var uid = User.FindFirst("uid")?.Value;
-            if (uid is null) return Unauthorized();
+            if (uid is null)
+            {
+                var resp = ApiResponse<string>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized);
+                return Unauthorized(resp);
+            }
 
             var user = await _users.GetByIdAsync(uid);
-            if (user is null) return NotFound();
+            if (user is null)
+            {
+                var resp = ApiResponse<string>.Fail("User not found", null, HttpStatusCode.NotFound);
+                return NotFound(resp);
+            }
 
-            return Ok(new { user.Id, user.Email, user.FullName, user.Roles });
+            var data = new { user.Id, user.Email, user.FullName, user.Roles };
+            return Ok(ApiResponse<object>.Ok(data));
         }
     }
 }
