@@ -92,26 +92,18 @@ namespace ShoppingPlatform.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GoogleCallback([FromQuery] string code, [FromQuery] string state)
         {
-            if (string.IsNullOrEmpty(code))
-                return BadRequest(new { message = "Missing code" });
+            if (string.IsNullOrEmpty(code)) return BadRequest(new { message = "Missing code" });
 
-            // decode state safely
             string? returnUrl = null;
-            string? nonce = null;
             try
             {
                 var stateJson = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(state));
-                var stateDoc = JsonSerializer.Deserialize<JsonElement>(stateJson);
-                if (stateDoc.TryGetProperty("returnUrl", out var ru)) returnUrl = ru.GetString();
-                if (stateDoc.TryGetProperty("nonce", out var n)) nonce = n.GetString();
-                // Optionally store nonce in server-side cache at redirect stage and validate here.
+                var s = JsonSerializer.Deserialize<JsonElement>(stateJson);
+                if (s.TryGetProperty("returnUrl", out var ru)) returnUrl = ru.GetString();
             }
-            catch
-            {
-                // ignore decode errors for now
-            }
+            catch { /* ignore decode errors for now */ }
 
-            // Exchange code for tokens (server-side)
+            // Exchange code for tokens (your existing code)
             using var http = new HttpClient();
             var form = new Dictionary<string, string?>
             {
@@ -131,13 +123,11 @@ namespace ShoppingPlatform.Controllers
 
             var tokenJson = await tokenResponse.Content.ReadAsStringAsync();
             var tokenDoc = JsonSerializer.Deserialize<JsonElement>(tokenJson);
-
             if (!tokenDoc.TryGetProperty("id_token", out var idTokenElem))
                 return BadRequest(new { message = "id_token not returned by Google" });
 
             var idToken = idTokenElem.GetString();
 
-            // Validate id_token
             GoogleJsonWebSignature.Payload payload;
             try
             {
@@ -151,7 +141,7 @@ namespace ShoppingPlatform.Controllers
                 return Unauthorized(new { message = "Invalid id_token", detail = ex.Message });
             }
 
-            // Upsert user
+            // Upsert user (your existing logic)
             var user = await _users.GetByEmailAsync(payload.Email);
             if (user == null)
             {
@@ -177,54 +167,59 @@ namespace ShoppingPlatform.Controllers
                 }
             }
 
-            // Issue application JWT + refresh token if you want
+            // Issue JWT
             var jwt = _jwt.GenerateToken(user);
 
-            // OPTIONAL: create and persist refresh token and set cookie (same as login)
+            // OPTIONAL: create refresh token and set cookie (remember dev cookie caveat below)
             var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
             var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
             refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             user.AddRefreshToken(refreshToken);
             await _users.UpdateAsync(user.Id!, user);
 
-            // set HttpOnly cookie (if you want browser to get refresh cookie)
+            // Set refresh cookie — in production keep Secure = true.
             var cookieOptions = new Microsoft.AspNetCore.Http.CookieOptions
             {
                 HttpOnly = true,
                 Expires = refreshToken.ExpiresAt,
-                Secure = true,
+                Secure = true, // NOTE: if frontend is http://localhost:3000, Secure=true prevents browser from sending the cookie in development
                 SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
                 Path = "/"
             };
             Response.Cookies.Append("refreshToken", refreshToken.Token, cookieOptions);
 
-            // If a valid returnUrl is provided and whitelisted, redirect the browser to it with token in fragment
+            // Redirect the browser to frontend returnUrl (if whitelisted),
+            // placing token in the fragment so it isn't sent to servers.
             if (!string.IsNullOrEmpty(returnUrl) && IsAllowedReturnUrl(returnUrl))
             {
-                // Put token in fragment (not query) so it is not sent to servers
-                var redirect = returnUrl + (returnUrl.Contains("#") ? "&" : "#") + "token=" + Uri.EscapeDataString(jwt);
-                return Redirect(redirect);
+                // Example result: http://localhost:3000/home#token=<jwt>
+                var separator = returnUrl.Contains("#") ? "&" : "#";
+                var redirectUrl = $"{returnUrl}{separator}token={Uri.EscapeDataString(jwt)}";
+                return Redirect(redirectUrl);
             }
 
-            // Fallback: return JSON (useful for API clients)
-            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName }, returnUrl });
+            // Fallback: return JSON (API clients)
+            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName } });
         }
 
         private bool IsAllowedReturnUrl(string? returnUrl)
         {
             if (string.IsNullOrEmpty(returnUrl)) return false;
-            // Very important: whitelist allowed frontend origins / hosts only.
-            // Add your production, staging, local (ngrok) domains here.
+            if (!Uri.IsWellFormedUriString(returnUrl, UriKind.Absolute)) return false;
+
             var allowedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "yobha.in",
         "localhost",
-        "127.0.0.1",
-        // e.g. "abcd-1234.ngrok.io" for testing - add one if using ngrok
+        "127.0.0.1"
+        // you can add ngrok host e.g. "abcd-1234.ngrok.io"
     };
 
-            if (!Uri.IsWellFormedUriString(returnUrl, UriKind.Absolute)) return false;
             var u = new Uri(returnUrl);
+            // allow specific localhost ports (common dev pattern)
+            if (u.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                return u.Port == 3000; // accept only localhost:3000
+
             return allowedHosts.Contains(u.Host);
         }
     }
