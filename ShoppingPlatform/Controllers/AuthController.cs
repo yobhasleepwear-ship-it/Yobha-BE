@@ -122,9 +122,11 @@ namespace ShoppingPlatform.Controllers
         // Admin registration (Admin-only)
         // -----------------------
         [HttpPost("register-admin")]
-        //[Authorize(Roles = "Admin")]
+        // [Authorize(Roles = "Admin")] // optionally keep it off during initial setup
+        [AllowAnonymous] // remove this once you only want Admins to create new Admins
         public async Task<ActionResult<ApiResponse<object>>> RegisterAdmin([FromBody] RegisterAdminDto dto)
         {
+            // Check if user already exists
             var existing = await _users.GetByEmailAsync(dto.Email);
             if (existing is not null)
             {
@@ -138,17 +140,42 @@ namespace ShoppingPlatform.Controllers
                 return Conflict(resp2);
             }
 
+            // Create admin user
             var user = new User
             {
                 Email = dto.Email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 Roles = new[] { "Admin" },
-                FullName = dto.FullName
+                FullName = dto.FullName,
+                CreatedAt = DateTime.UtcNow
             };
 
             await _users.CreateAsync(user);
 
-            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "Admin created");
+            // --- Auto-login: generate tokens ---
+            var accessToken = _jwt.GenerateToken(user);
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
+            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            // Save refresh token to user
+            user.AddRefreshToken(refreshToken);
+            user.LastLoginAt = DateTime.UtcNow;
+            await _users.UpdateAsync(user.Id!, user);
+
+            // Set cookie for refresh token
+            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+            // Prepare response
+            var data = new
+            {
+                token = accessToken,
+                expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
+                refreshToken = refreshToken.Token,
+                user = new { user.Id, user.Email, user.FullName, user.Roles }
+            };
+
+            var body = ApiResponse<object>.Created(data, "Admin created and logged in");
             return CreatedAtAction(nameof(RegisterAdmin), new { id = user.Id }, body);
         }
 
