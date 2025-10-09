@@ -106,7 +106,24 @@ builder.Services.AddHttpClient<TwoFactorService>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(15);
 });
+
+// Add the TwoFactorSmsSender that accepts IConfiguration and ILogger
 builder.Services.AddSingleton<ISmsSender, TwoFactorSmsSender>();
+
+// Optional: Log presence of TwoFactor key at startup (non-secret)
+var twoFactorApiKey = configuration["TwoFactor:ApiKey"]
+                       ?? Environment.GetEnvironmentVariable("TWOFACTOR__APIKEY")
+                       ?? Environment.GetEnvironmentVariable("TWOFACTOR_APIKEY");
+
+var logger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger("Startup");
+if (string.IsNullOrWhiteSpace(twoFactorApiKey))
+{
+    logger.LogWarning("TwoFactor API key not found in TwoFactor:ApiKey or env vars (TWOFACTOR__APIKEY / TWOFACTOR_APIKEY).");
+}
+else
+{
+    logger.LogInformation("TwoFactor API key presence confirmed (length={Length}).", twoFactorApiKey.Length);
+}
 
 // ---------------------------
 // Google settings

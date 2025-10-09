@@ -4,6 +4,7 @@
     {
         public string? ApiKey { get; set; }
         public string? SenderId { get; set; }
+        public string? TemplateId { get; set; }
         public string? BaseUrl { get; set; } = "https://2factor.in";
     }
 }
