@@ -76,6 +76,7 @@ namespace ShoppingPlatform.Controllers
                 }
             }
 
+            // create user
             var user = new User
             {
                 Email = email,
@@ -84,12 +85,36 @@ namespace ShoppingPlatform.Controllers
                 FullName = dto.FullName,
                 PhoneNumber = string.IsNullOrWhiteSpace(phoneNormalized) ? null : phoneNormalized,
                 PhoneVerified = false,
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
             };
 
             await _users.CreateAsync(user);
 
-            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "User created");
+            // --- auto-login: generate tokens and persist refresh token ---
+            var accessToken = _jwt.GenerateToken(user);
+
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
+            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            // add and persist refresh token to user
+            user.AddRefreshToken(refreshToken);
+            user.LastLoginAt = DateTime.UtcNow;
+            await _users.UpdateAsync(user.Id!, user);
+
+            // set cookie for web clients
+            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+            var data = new
+            {
+                token = accessToken,
+                expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
+                refreshToken = refreshToken.Token,
+                user = new { user.Id, user.Email, user.FullName }
+            };
+
+            // Return 201 (created) along with tokens — same shape as your login response
+            var body = ApiResponse<object>.Created(data, "User created and logged in");
             return CreatedAtAction(nameof(RegisterUser), new { id = user.Id }, body);
         }
 
