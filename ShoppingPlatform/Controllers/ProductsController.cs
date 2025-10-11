@@ -71,18 +71,18 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpGet("{id}")]
         [AllowAnonymous]
-        public async Task<ActionResult<ApiResponse<ProductDetailDto>>> Get(string id)
+        public async Task<ActionResult<ApiResponse<Product>>> Get(string id)
         {
             var product = await _repo.GetByIdAsync(id);
             if (product == null)
             {
-                var notFound = ApiResponse<ProductDetailDto>.Fail("Product not found", null, HttpStatusCode.NotFound);
+                var notFound = ApiResponse<Product>.Fail("Product not found", null, HttpStatusCode.NotFound);
                 return NotFound(notFound);
             }
 
-            var dto = ProductMappings.ToDetailDto(product);
+           // var dto = ProductMappings.ToDetailDto(product);
 
-            var ok = ApiResponse<ProductDetailDto>.Ok(dto, "OK");
+            var ok = ApiResponse<Product>.Ok(product, "OK");
             return Ok(ok);
         }
 
