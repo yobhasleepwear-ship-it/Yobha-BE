@@ -6,88 +6,70 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace ShoppingPlatform.Sms
 {
     public class TwoFactorService
     {
         private readonly HttpClient _http;
-        private readonly TwoFactorSettings _cfg;
-        public TwoFactorService(HttpClient http, IOptions<TwoFactorSettings> opts)
+        public TwoFactorService(HttpClient http)
         {
             _http = http;
-            _cfg = opts.Value ?? new TwoFactorSettings();
         }
 
-        // Sends OTP. Returns session id (string) on success, throws on failure.
-        public async Task<string> SendOtpAsync(string apiKey, string phoneNumber, string? senderId = null)
+        // Sends a template SMS and returns session id (or throws on failure)
+        public async Task<string> SendOtpAsync(string apiKey, string phoneNumber, string? senderId = null, string templateName = "OTPSendTemplate1", string? var1 = null, string? var2 = null)
         {
-            // 2factor endpoint format:
-            // https://2factor.in/API/V1/{API_KEY}/SMS/{MOBILE_NUMBER}/AUTOGEN/{OTP_TEMPLATE}
-            // We'll use AUTOGEN (auto-generate OTP). No template passed.
-            var baseUrl = _cfg.BaseUrl?.TrimEnd('/') ?? "https://2factor.in";
-            var url = $"{baseUrl}/API/V1/{apiKey}/SMS/{phoneNumber}/AUTOGEN";
+            if (string.IsNullOrWhiteSpace(apiKey)) throw new ArgumentException("apiKey");
+            if (string.IsNullOrWhiteSpace(phoneNumber)) throw new ArgumentException("phoneNumber");
 
-            var resp = await _http.GetAsync(url);
-            var content = await resp.Content.ReadAsStringAsync();
+            var url = $"https://2factor.in/API/V1/{apiKey}/ADDON_SERVICES/SEND/TSMS";
 
+            var payload = new
+            {
+                From = senderId ?? "YOBHAS",        // use configured SenderId or fallback
+                To = phoneNumber,
+                TemplateName = templateName,
+                VAR1 = var1 ?? string.Empty,
+                VAR2 = var2 ?? string.Empty
+            };
+
+            var json = JsonConvert.SerializeObject(payload);
+            var resp = await _http.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
+
+            var body = await resp.Content.ReadAsStringAsync();
             if (!resp.IsSuccessStatusCode)
-            {
-                throw new Exception($"2Factor send OTP failed: {resp.StatusCode} {content}");
-            }
+                throw new InvalidOperationException($"2Factor Send failed ({(int)resp.StatusCode}): {body}");
 
-            // Example success JSON:
-            // {"Status":"Success","Details":"<SESSION_ID>"}
-            try
-            {
-                using var doc = JsonDocument.Parse(content);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("Status", out var s) && s.GetString() == "Success"
-                    && root.TryGetProperty("Details", out var d))
-                {
-                    return d.GetString() ?? throw new Exception("2Factor returned empty session id");
-                }
-
-                // On failure: {"Status":"Error", "Details":"Invalid API Key"}
-                var details = root.TryGetProperty("Details", out var dd) ? dd.GetString() : content;
-                throw new Exception($"2Factor response error: {details}");
-            }
-            catch (JsonException)
-            {
-                throw new Exception($"Unrecognized 2Factor response: {content}");
-            }
+            // 2Factor returns JSON like: { "Status":"Success","Details":"<sessionId>" }
+            dynamic parsed = JsonConvert.DeserializeObject(body);
+            string details = parsed?.Details ?? throw new InvalidOperationException("2Factor response missing Details");
+            return details;
         }
 
-        // Verify OTP using session id + otp
+        // Verifies an OTP given the sessionId and the OTP value
         public async Task<bool> VerifyOtpAsync(string apiKey, string sessionId, string otp)
         {
-            var baseUrl = _cfg.BaseUrl?.TrimEnd('/') ?? "https://2factor.in";
-            var url = $"{baseUrl}/API/V1/{apiKey}/SMS/VERIFY/{sessionId}/{otp}";
+            if (string.IsNullOrWhiteSpace(apiKey)) throw new ArgumentException("apiKey");
+            if (string.IsNullOrWhiteSpace(sessionId)) throw new ArgumentException("sessionId");
+            if (string.IsNullOrWhiteSpace(otp)) throw new ArgumentException("otp");
 
+            // 2Factor verify endpoint for session-based verification
+            var url = $"https://2factor.in/API/V1/{apiKey}/SMS/VERIFY/{sessionId}/{otp}";
             var resp = await _http.GetAsync(url);
-            var content = await resp.Content.ReadAsStringAsync();
 
+            var body = await resp.Content.ReadAsStringAsync();
             if (!resp.IsSuccessStatusCode)
-            {
-                // treat as not verified
                 return false;
-            }
 
-            // Example success JSON:
-            // {"Status":"Success","Details":"OTP Matched"}
-            try
-            {
-                using var doc = JsonDocument.Parse(content);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("Status", out var s) && s.GetString() == "Success")
-                    return true;
-
-                return false;
-            }
-            catch (JsonException)
-            {
-                return false;
-            }
+            // Response example: { "Status":"Success", "Details":"OTP Matched" }
+            dynamic parsed = JsonConvert.DeserializeObject(body);
+            string status = parsed?.Status ?? string.Empty;
+            return string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
