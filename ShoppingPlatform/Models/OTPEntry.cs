@@ -6,6 +6,8 @@ namespace ShoppingPlatform.Models
 {
     public class OtpEntry
     {
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
         public string Id { get; set; } = string.Empty;
         public string PhoneNumber { get; set; } = string.Empty;
         public string SessionId { get; set; } = string.Empty;
