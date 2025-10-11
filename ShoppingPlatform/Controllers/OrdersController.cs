@@ -5,6 +5,7 @@ using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 
@@ -67,57 +68,116 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
 
-            // Get the user's cart
+            // Get the user's cart items (raw persisted CartItem model)
             var cartItems = await _cartRepo.GetForUserAsync(userId);
-            if (!cartItems.Any())
+            if (cartItems == null || !cartItems.Any())
             {
                 var badResponse = ApiResponse<Order>.Fail("Cart is empty", null, HttpStatusCode.BadRequest);
                 return BadRequest(badResponse);
             }
 
-            // Build order items with price snapshot
             var orderItems = new List<OrderItem>();
-            decimal total = 0;
+            decimal subTotal = 0m;
+            string currency = "INR";
 
-            foreach (var item in cartItems)
+            foreach (var cartItem in cartItems)
             {
-                var product = await _productRepo.GetByIdAsync(item.ProductId);
-                if (product == null) continue;
+                // Prefer using the snapshot stored inside the cart item
+                var snap = cartItem.Snapshot;
 
-                // Determine price from product or variant
-                decimal unitPrice = product.Price;
-                if (product.Variants != null && product.Variants.Any(v => v.Sku == item.VariantSku))
+                // If snapshot is missing for some reason, try to hydrate from product repo
+                if (snap == null || string.IsNullOrWhiteSpace(snap.ProductId))
                 {
-                    var variant = product.Variants.First(v => v.Sku == item.VariantSku);
-                    if (variant.PriceOverride.HasValue)
-                        unitPrice = variant.PriceOverride.Value;
+                    // fallback: try to fetch product by Mongo _id (ProductObjectId) or ProductId
+                    ShoppingPlatform.Models.Product? product = null;
+                    if (!string.IsNullOrWhiteSpace(cartItem.ProductObjectId))
+                        product = await _productRepo.GetByIdAsync(cartItem.ProductObjectId);
+                    if (product == null && !string.IsNullOrWhiteSpace(cartItem.ProductId))
+                        product = await _productRepo.GetByProductIdAsync(cartItem.ProductId);
+
+                    if (product == null) continue; // skip missing product
+
+                    // find variant if any
+                    ProductVariant? variant = null;
+                    if (!string.IsNullOrWhiteSpace(cartItem.VariantSku) && product.Variants != null)
+                        variant = product.Variants.FirstOrDefault(v => v.Sku == cartItem.VariantSku);
+
+                    decimal unitPrice = variant?.PriceOverride ?? product.Price;
+
+                    var oiFallback = new OrderItem
+                    {
+                        ProductId = product.ProductId,
+                        ProductObjectId = product.Id,
+                        ProductName = product.Name,
+                        VariantSku = cartItem.VariantSku,
+                        VariantId = variant?.Id,
+                        Quantity = cartItem.Quantity,
+                        UnitPrice = unitPrice,
+                        LineTotal = unitPrice * cartItem.Quantity,
+                        CompareAtPrice = product.CompareAtPrice,
+                        Currency = "INR",
+                        ThumbnailUrl = variant?.Images?.FirstOrDefault()?.Url ?? product.Images?.FirstOrDefault()?.Url,
+                        Slug = product.Slug
+                    };
+
+                    orderItems.Add(oiFallback);
+                    subTotal += oiFallback.LineTotal;
+                    currency = oiFallback.Currency ?? currency;
                 }
-
-                orderItems.Add(new OrderItem
+                else
                 {
-                    ProductId = item.ProductId,
-                    ProductName = product.Name,
-                    VariantSku = item.VariantSku,
-                    Quantity = item.Quantity,
-                    UnitPrice = unitPrice
-                });
+                    // use snapshot values (trust snapshot as the canonical price at add-to-cart)
+                    decimal unitPrice = snap.UnitPrice;
+                    var oi = new OrderItem
+                    {
+                        ProductId = snap.ProductId,
+                        ProductObjectId = snap.ProductObjectId,
+                        ProductName = snap.Name,
+                        VariantSku = snap.VariantSku ?? cartItem.VariantSku,
+                        VariantId = snap.VariantId,
+                        Quantity = cartItem.Quantity,
+                        UnitPrice = unitPrice,
+                        LineTotal = unitPrice * cartItem.Quantity,
+                        CompareAtPrice = snap.CompareAtPrice,
+                        Currency = snap.Currency ?? "INR",
+                        ThumbnailUrl = snap.ThumbnailUrl,
+                        Slug = snap.Slug
+                    };
 
-                total += unitPrice * item.Quantity;
+                    orderItems.Add(oi);
+                    subTotal += oi.LineTotal;
+                    currency = oi.Currency; // assume currency consistent across items; if mixed, handle conversions
+                }
             }
 
-            // Create order object
+            if (!orderItems.Any())
+            {
+                var badResponse = ApiResponse<Order>.Fail("No valid items in cart to create order", null, HttpStatusCode.BadRequest);
+                return BadRequest(badResponse);
+            }
+
+            // compute totals: subTotal already computed
+            decimal shipping = 0m; // compute shipping rules here if any
+            decimal tax = 0m;      // compute tax if needed
+            decimal discount = 0m; // apply coupon/discount if any
+            decimal grandTotal = Decimal.Round(subTotal + shipping + tax - discount, 2);
+
             var order = new Order
             {
                 UserId = userId,
                 Items = orderItems,
-                Total = total,
+                SubTotal = Decimal.Round(subTotal, 2),
+                Shipping = shipping,
+                Tax = tax,
+                Discount = discount,
+                Total = grandTotal,
                 Status = "Pending",
                 CreatedAt = DateTime.UtcNow
             };
 
             var created = await _orderRepo.CreateAsync(order);
 
-            // Optionally clear the cart
+            // Optionally: clear cart after order creation
             await _cartRepo.ClearAsync(userId);
 
             var createdResponse = ApiResponse<Order>.Created(created, "Order created successfully");
@@ -130,17 +190,32 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpPatch("{id}/status")]
         [Authorize(Roles = "Admin")]
-        public async Task<ActionResult<ApiResponse<object>>> UpdateStatus(string id, [FromBody] string status)
+        public async Task<ActionResult<ApiResponse<OrderStatusResponse>>> UpdateStatus(
+            string id,
+            [FromBody] ShoppingPlatform.DTOs.UpdateOrderStatusRequest request)
         {
-            var updated = await _orderRepo.UpdateStatusAsync(id, status);
-            if (!updated)
-            {
-                var notFoundResponse = ApiResponse<object>.Fail("Order not found", null, HttpStatusCode.NotFound);
-                return NotFound(notFoundResponse);
-            }
+            if (!ModelState.IsValid)
+                return BadRequest(ApiResponse<OrderStatusResponse>.Fail("Invalid request", null, HttpStatusCode.BadRequest));
 
-            var response = ApiResponse<object>.Ok(null, "Status updated successfully");
-            return Ok(response);
+            // update status in repo
+            var updated = await _orderRepo.UpdateStatusAsync(id, request.Status);
+            if (!updated)
+                return NotFound(ApiResponse<OrderStatusResponse>.Fail("Order not found", null, HttpStatusCode.NotFound));
+
+            // optional: fetch order to return updated info or build response
+            var order = await _orderRepo.GetByIdAsync(id);
+            var responsePayload = new ShoppingPlatform.DTOs.OrderStatusResponse
+            {
+                OrderId = id,
+                Status = request.Status,
+                UpdatedAt = order?.UpdatedAt ?? DateTime.UtcNow,
+                UpdatedBy = User?.FindFirst("sub")?.Value,
+                Note = request.Note
+            };
+
+            // optionally trigger notifications if request.NotifyCustomer == true
+
+            return Ok(ApiResponse<OrderStatusResponse>.Ok(responsePayload, "Status updated successfully"));
         }
     }
 }

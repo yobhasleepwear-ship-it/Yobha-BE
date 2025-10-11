@@ -1,8 +1,7 @@
-﻿using System.Collections.Generic;
-using System.Net;
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 
@@ -21,24 +20,29 @@ namespace ShoppingPlatform.Controllers
 
         [HttpGet]
         [Authorize]
-        public async Task<ActionResult<ApiResponse<IEnumerable<CartItem>>>> Get()
+        public async Task<ActionResult<ApiResponse<CartResponse>>> Get()
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
-            var items = await _repo.GetForUserAsync(userId);
-
-            var resp = ApiResponse<IEnumerable<CartItem>>.Ok(items, "OK");
-            return Ok(resp);
+            var dto = await _repo.GetForUserDtoAsync(userId);
+            return Ok(ApiResponse<CartResponse>.Ok(dto, "OK"));
         }
 
         [HttpPost]
         [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> AddOrUpdate([FromBody] CartItem dto)
+        public async Task<ActionResult<ApiResponse<CartItemResponse>>> AddOrUpdate([FromBody] AddOrUpdateCartRequest request)
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
-            await _repo.AddOrUpdateAsync(userId, dto.ProductId, dto.VariantSku, dto.Quantity);
+            var item = await _repo.AddOrUpdateAsync(userId, request.ProductId, request.VariantSku, request.Quantity, request.Currency, request.Note);
+            return Ok(ApiResponse<CartItemResponse>.Ok(item, "Added/Updated"));
+        }
 
-            var resp = ApiResponse<object>.Ok(null, "Added/Updated");
-            return Ok(resp);
+        [HttpPatch("quantity")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<CartItemResponse>>> UpdateQuantity([FromBody] UpdateCartQuantityRequest request)
+        {
+            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var item = await _repo.UpdateQuantityAsync(userId, request.CartItemId, request.Quantity);
+            return Ok(ApiResponse<CartItemResponse>.Ok(item, "Updated"));
         }
 
         [HttpDelete("{id}")]
@@ -47,9 +51,7 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.RemoveAsync(userId, id);
-
-            var resp = ApiResponse<object>.Ok(null, "Removed");
-            return Ok(resp);
+            return Ok(ApiResponse<object>.Ok(null, "Removed"));
         }
 
         [HttpDelete("clear")]
@@ -58,9 +60,7 @@ namespace ShoppingPlatform.Controllers
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
             await _repo.ClearAsync(userId);
-
-            var resp = ApiResponse<object>.Ok(null, "Cleared cart");
-            return Ok(resp);
+            return Ok(ApiResponse<object>.Ok(null, "Cleared cart"));
         }
     }
 }
