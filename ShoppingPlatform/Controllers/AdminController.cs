@@ -43,43 +43,5 @@ namespace ShoppingPlatform.Controllers
             return Ok(success);
         }
 
-        [HttpPost("seed/products")]
-        public async Task<ActionResult<ApiResponse<object>>> SeedProducts([FromQuery] int count = 10)
-        {
-            if (count <= 0 || count > 500)
-            {
-                var resp = ApiResponse<string>.Fail("count must be between 1 and 500", null, HttpStatusCode.BadRequest);
-                return BadRequest(resp);
-            }
-
-            var rnd = new Random();
-            var created = new List<Product>();
-
-            var categories = new[] { "electronics", "books", "clothing", "home", "toys" };
-
-            for (int i = 0; i < count; i++)
-            {
-                var p = new Product
-                {
-                    Id = null!,
-                    Name = $"Demo Product {Guid.NewGuid().ToString().Substring(0, 8)}",
-                    Slug = $"demo-product-{Guid.NewGuid().ToString().Substring(0, 8)}",
-                    Description = "Auto-seeded demo product.",
-                    Price = (decimal)(rnd.NextDouble() * 1000 + 10),
-                    Category = categories[rnd.Next(categories.Length)],
-                    Stock = rnd.Next(0, 200),
-                    IsFeatured = rnd.Next(0, 10) == 0,
-                    SalesCount = rnd.Next(0, 500),
-                    Images = new List<ProductImage>()
-                };
-
-                await _repo.CreateAsync(p);
-                created.Add(p);
-            }
-
-            var result = new { seeded = created.Count };
-            var ok = ApiResponse<object>.Ok(result, "Products seeded");
-            return Ok(ok);
-        }
     }
 }

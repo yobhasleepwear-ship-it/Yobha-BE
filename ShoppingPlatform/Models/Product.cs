@@ -5,6 +5,16 @@ using System.Collections.Generic;
 
 namespace ShoppingPlatform.Models
 {
+    /// <summary>
+    /// Main product document stored in MongoDB.
+    /// Preserves existing fields and adds new fields:
+    /// - CompareAtPrice, DiscountPercent
+    /// - AvailableColors, SizeOfProduct
+    /// - PriceList (per size/country)
+    /// - Specifications, KeyFeatures, CareInstructions
+    /// - Inventory (canonical source of truth for size+color qty)
+    /// - ShippingInfo, SEO fields
+    /// </summary>
     public class Product
     {
         // Mongo _id (ObjectId string)
@@ -12,13 +22,11 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.ObjectId)]
         public string Id { get; set; } = string.Empty;
 
-        // ---- New readable product id (e.g., PID2138282) ----
-        // This is the field you asked for: human-friendly, unique.
-        // Use repository method ExistsByProductIdAsync when generating to guarantee uniqueness.
+        // Human-friendly product id (PID2138282)
         [BsonElement("productId")]
         public string ProductId { get; set; } = string.Empty;
 
-        // --- existing fields (kept for backward compatibility) ---
+        // ---- existing fields (kept for backward compatibility) ----
         [BsonElement("name")]
         public string Name { get; set; } = string.Empty;
 
@@ -28,23 +36,25 @@ namespace ShoppingPlatform.Models
         [BsonElement("description")]
         public string Description { get; set; } = string.Empty;
 
-        // legacy base price (fallback)
+        // legacy base price (fallback) — use Decimal128 for currency
         [BsonElement("price")]
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal Price { get; set; }
 
-        // legacy taxonomy (kept)
-        [BsonElement("category")]
-        public string Category { get; set; } = string.Empty;
+        // NEW: compare/strike-through price (used for discount badge)
+        [BsonElement("compareAtPrice")]
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal? CompareAtPrice { get; set; }
 
-        [BsonElement("subCategory")]
-        public string SubCategory { get; set; } = string.Empty;
+        // Derived/explicit discount percent (optional, can be computed)
+        [BsonElement("discountPercent")]
+        public int? DiscountPercent { get; set; }
 
-        // convenience total stock (optional)
+        // convenience total stock (deprecated if Inventory used)
         [BsonElement("stock")]
         public int Stock { get; set; } = 0;
 
-        // --- variants & images (existing) ---
+        // variants & images (existing)
         [BsonElement("variants")]
         public List<ProductVariant> Variants { get; set; } = new();
 
@@ -85,67 +95,130 @@ namespace ShoppingPlatform.Models
 
 
         // ------------------------
-        // New fields for the updated API shape
+        // New fields for the updated API / UI shape
         // ------------------------
 
-        // Mandatory top-level product grouping (e.g., "sleepwear", "loungewear", "homeWear")
+        // Top-level storefront grouping (sleepwear, loungewear, etc.)
         [BsonElement("productMainCategory")]
         public string ProductMainCategory { get; set; } = string.Empty;
 
-        // Secondary category level (e.g., "women", "men", "kids", "pets")
+        // Secondary storefront category (women/men/kids)
         [BsonElement("productCategory")]
         public string ProductCategory { get; set; } = string.Empty;
 
-        // Sub-category (e.g., "sleepwearSets", "coordSets")
+        // Subcategory (e.g., "sleepwearSets")
         [BsonElement("productSubCategory")]
         public string ProductSubCategory { get; set; } = string.Empty;
 
-        // Explicit list of sizes available for this product (S/M/L etc.)
+        // Sizes available for UI rendering (XS/S/M etc.)
         [BsonElement("sizeOfProduct")]
         public List<string> SizeOfProduct { get; set; } = new();
 
-        // Fabric types (cotton, silk, etc.)
+        // Colors available for UI swatches (names or hex codes)
+        [BsonElement("availableColors")]
+        public List<string> AvailableColors { get; set; } = new();
+
+        // Fabric types (used in specs/filter)
         [BsonElement("fabricType")]
         public List<string> FabricType { get; set; } = new();
 
-        // Price array: supports per-size, per-country price + quantity
-        // Field name: priceList (keeps existing PriceList usage)
+        // Price list for per-size / per-country variants
         [BsonElement("priceList")]
         public List<Price> PriceList { get; set; } = new();
 
-        // Links to other products (variations) by product id — e.g. "Prod002" or readable PID
+        // Links to other readable product ids that are variations
         [BsonElement("productVariationIds")]
         public List<string> ProductVariationIds { get; set; } = new();
 
-        // Multi-region base prices map (kept for compatibility)
+        // Multi-region base prices list (replaces dictionary)
         [BsonElement("countryPrices")]
-        public Dictionary<string, decimal> CountryPrices { get; set; } = new();
+        public List<CountryPrice> CountryPrices { get; set; } = new();
+
+        // Structured specifications (Details tab on product page)
+        [BsonElement("specifications")]
+        public ProductSpecifications? Specifications { get; set; }
+
+        // Lists shown in the details tab
+        [BsonElement("keyFeatures")]
+        public List<string> KeyFeatures { get; set; } = new();
+
+        [BsonElement("careInstructions")]
+        public List<string> CareInstructions { get; set; } = new();
+
+        // ------------------------
+        // Inventory: canonical source-of-truth for stock per (size, color)
+        // ------------------------
+        // Use Inventory for availability checks and reservations.
+        [BsonElement("inventory")]
+        public List<InventoryItem> Inventory { get; set; } = new();
+
+        // Shipping & policy metadata (shown as badges on UI)
+        [BsonElement("freeDelivery")]
+        public bool FreeDelivery { get; set; } = false;
+
+        [BsonElement("returnPolicy")]
+        public string? ReturnPolicy { get; set; } // e.g., "7 Days"
+
+        [BsonElement("shippingInfo")]
+        public ShippingInfo? ShippingInfo { get; set; }
+
+        // SEO & storefront metadata
+        [BsonElement("metaTitle")]
+        public string? MetaTitle { get; set; }
+
+        [BsonElement("metaDescription")]
+        public string? MetaDescription { get; set; }
+
+        // Analytics / counters
+        [BsonElement("views")]
+        public long Views { get; set; } = 0;
+
+        [BsonElement("unitsSold")]
+        public long UnitsSold { get; set; } = 0;
     }
 
-    // Price subdocument
-    public class Price
+    // ------------------------
+    // Inventory item — canonical stock record keyed by (size, color) optionally per warehouse
+    // ------------------------
+    public class InventoryItem
     {
         [BsonRepresentation(BsonType.String)]
         [BsonElement("id")]
         public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
+        // Optional link to variant or SKU
+        [BsonElement("variantId")]
+        public string? VariantId { get; set; }
+
+        [BsonElement("sku")]
+        public string? Sku { get; set; }
+
+        // Unique defining tuple for inventory: size + color
         [BsonElement("size")]
         public string Size { get; set; } = string.Empty;
 
-        [BsonElement("price")]
-        [BsonRepresentation(BsonType.Decimal128)]
-        public decimal PriceAmount { get; set; }
+        [BsonElement("color")]
+        public string Color { get; set; } = string.Empty;
 
-        [BsonElement("currency")]
-        public string Currency { get; set; } = string.Empty;
-
+        // Available quantity for this tuple
         [BsonElement("quantity")]
         public int Quantity { get; set; } = 0;
 
-        [BsonElement("country")]
-        public string Country { get; set; } = string.Empty;
+        // Optional reserved qty (for cart reservation flows)
+        [BsonElement("reserved")]
+        public int Reserved { get; set; } = 0;
+
+        // Optional warehouse/location level
+        [BsonElement("warehouseId")]
+        public string? WarehouseId { get; set; }
+
+        [BsonElement("updatedAt")]
+        public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }
 
+    // ------------------------
+    // Variant kept for backwards compatibility / UI mapping
+    // ------------------------
     public class ProductVariant
     {
         [BsonRepresentation(BsonType.String)]
@@ -161,6 +234,7 @@ namespace ShoppingPlatform.Models
         [BsonElement("size")]
         public string Size { get; set; } = string.Empty;
 
+        // Deprecated: keep for compatibility; prefer Inventory for actual stock checks
         [BsonElement("quantity")]
         public int Quantity { get; set; } = 0;
 
@@ -175,10 +249,13 @@ namespace ShoppingPlatform.Models
         public bool IsActive { get; set; } = true;
     }
 
+    // ------------------------
+    // Media
+    // ------------------------
     public class ProductImage
     {
         [BsonElement("url")]
-        public string Url { get; set; } = null!;
+        public string Url { get; set; } = string.Empty;
 
         [BsonElement("thumbnailUrl")]
         public string? ThumbnailUrl { get; set; }
@@ -186,13 +263,63 @@ namespace ShoppingPlatform.Models
         [BsonElement("alt")]
         public string? Alt { get; set; }
 
+        // Internal tracking who uploaded the image
         [BsonElement("uploadedByUserId")]
-        public string UploadedByUserId { get; set; } = null!;
+        public string? UploadedByUserId { get; set; }
 
         [BsonElement("uploadedAt")]
         public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
     }
 
+    // ------------------------
+    // Price record (used in PriceList)
+    // ------------------------
+    public class Price
+    {
+        [BsonRepresentation(BsonType.String)]
+        [BsonElement("id")]
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+        [BsonElement("size")]
+        public string Size { get; set; } = string.Empty;
+
+        [BsonElement("price")]
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal PriceAmount { get; set; }
+
+        [BsonElement("currency")]
+        public string Currency { get; set; } = "INR";
+
+        [BsonElement("quantity")]
+        public int Quantity { get; set; } = 0;
+
+        [BsonElement("country")]
+        public string Country { get; set; } = string.Empty;
+    }
+
+    // ------------------------
+    // Country price record (replaces countryPrices dictionary)
+    // ------------------------
+    public class CountryPrice
+    {
+        [BsonRepresentation(BsonType.String)]
+        [BsonElement("id")]
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+        [BsonElement("country")]
+        public string Country { get; set; } = string.Empty;
+
+        [BsonElement("price")]
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal PriceAmount { get; set; }
+
+        [BsonElement("currency")]
+        public string Currency { get; set; } = "INR";
+    }
+
+    // ------------------------
+    // Reviews
+    // ------------------------
     public class Review
     {
         [BsonElement("id")]
@@ -212,5 +339,65 @@ namespace ShoppingPlatform.Models
 
         [BsonElement("approved")]
         public bool Approved { get; set; } = false;
+    }
+
+    // ------------------------
+    // Structured product specifications (Details tab)
+    // ------------------------
+    public class ProductSpecifications
+    {
+        [BsonElement("fabric")]
+        public string? Fabric { get; set; }
+
+        [BsonElement("length")]
+        public string? Length { get; set; }
+
+        [BsonElement("origin")]
+        public string? Origin { get; set; }
+
+        [BsonElement("fit")]
+        public string? Fit { get; set; }
+
+        [BsonElement("care")]
+        public string? Care { get; set; }
+
+        // Flexible extra rows converted from dictionary to typed list
+        [BsonElement("extra")]
+        public List<SpecificationField>? Extra { get; set; }
+    }
+
+    // ------------------------
+    // Specification field (replaces dictionary key/value)
+    // ------------------------
+    public class SpecificationField
+    {
+        [BsonRepresentation(BsonType.String)]
+        [BsonElement("id")]
+        public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+        [BsonElement("key")]
+        public string Key { get; set; } = string.Empty;
+
+        [BsonElement("value")]
+        public string Value { get; set; } = string.Empty;
+    }
+
+    // ------------------------
+    // Shipping
+    // ------------------------
+    public class ShippingInfo
+    {
+        [BsonElement("freeShipping")]
+        public bool FreeShipping { get; set; } = false;
+
+        [BsonElement("estimatedDelivery")]
+        public string? EstimatedDelivery { get; set; } // e.g., "2-3 Days"
+
+        [BsonElement("shippingPrice")]
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal? ShippingPrice { get; set; }
+
+        [BsonElement("cashOnDelivery")]
+        public bool CashOnDelivery { get; set; } = false;
     }
 }

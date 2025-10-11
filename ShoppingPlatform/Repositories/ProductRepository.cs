@@ -19,8 +19,9 @@ namespace ShoppingPlatform.Repositories
             _collection = database.GetCollection<Product>(collectionName);
         }
 
-        // Query with basic filters, paging and sorting.
-        // Returns DTOs (list items) and total count for pagination.
+        // -----------------------
+        // QueryAsync
+        // -----------------------
         public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,
             decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
         {
@@ -33,7 +34,6 @@ namespace ShoppingPlatform.Repositories
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                // simple text: search in name or description or slug
                 var qLower = q.Trim();
                 var nameFilter = builder.Regex(p => p.Name, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
                 var descFilter = builder.Regex(p => p.Description, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
@@ -43,11 +43,10 @@ namespace ShoppingPlatform.Repositories
 
             if (!string.IsNullOrWhiteSpace(category))
             {
-                // match either new productCategory or legacy category
                 var cat = category.Trim();
                 var catFilter = builder.Or(
                     builder.Eq(p => p.ProductCategory, cat),
-                    builder.Eq(p => p.Category, cat),
+                    builder.Eq(p => p.ProductSubCategory, cat),
                     builder.Eq(p => p.ProductMainCategory, cat)
                 );
                 filters.Add(catFilter);
@@ -55,17 +54,15 @@ namespace ShoppingPlatform.Repositories
 
             var combinedFilter = filters.Count > 0 ? builder.And(filters) : builder.Empty;
 
-            // Count total matching documents
             var total = await _collection.CountDocumentsAsync(combinedFilter);
 
-            // Sorting
             var sortDefBuilder = Builders<Product>.Sort;
             SortDefinition<Product> sortDef = sort switch
             {
                 "popular" => sortDefBuilder.Descending(p => p.SalesCount),
                 "price_asc" => sortDefBuilder.Ascending(p => p.Price),
                 "price_desc" => sortDefBuilder.Descending(p => p.Price),
-                _ => sortDefBuilder.Descending(p => p.CreatedAt) // latest default
+                _ => sortDefBuilder.Descending(p => p.CreatedAt)
             };
 
             var skip = (page - 1) * pageSize;
@@ -75,7 +72,6 @@ namespace ShoppingPlatform.Repositories
                 .Limit(pageSize)
                 .ToListAsync();
 
-            // Map to DTOs (we don't apply minPrice/maxPrice filters in DB for simplicity; do them in-memory)
             var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
 
             if (minPrice.HasValue || maxPrice.HasValue)
@@ -87,29 +83,25 @@ namespace ShoppingPlatform.Repositories
                     if (maxPrice.HasValue && price > maxPrice.Value) return false;
                     return true;
                 }).ToList();
-
-                // If filtering changed count drastically we keep 'total' as DB total (approx). If you want exact total after price filtering,
-                // you would need a more complex aggregation server-side. For now this keeps QueryAsync efficient.
             }
 
             return (mapped, total);
         }
 
+        // -----------------------
+        // GetById / GetByProductId / Exists
+        // -----------------------
         public async Task<Product?> GetByIdAsync(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return null;
-
-            // Try find by ObjectId string or by direct _id string
             var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
             var result = await _collection.Find(filter).FirstOrDefaultAsync();
-
             return result;
         }
 
         public async Task<Product?> GetByProductIdAsync(string productId)
         {
             if (string.IsNullOrWhiteSpace(productId)) return null;
-
             var filter = Builders<Product>.Filter.Eq(p => p.ProductId, productId);
             return await _collection.Find(filter).FirstOrDefaultAsync();
         }
@@ -117,11 +109,13 @@ namespace ShoppingPlatform.Repositories
         public async Task<bool> ExistsByProductIdAsync(string productId)
         {
             if (string.IsNullOrWhiteSpace(productId)) return false;
-
             var filter = Builders<Product>.Filter.Eq(p => p.ProductId, productId);
             return await _collection.Find(filter).Limit(1).AnyAsync();
         }
 
+        // -----------------------
+        // Create / Update / Delete
+        // -----------------------
         public async Task CreateAsync(Product product)
         {
             if (product == null) throw new ArgumentNullException(nameof(product));
@@ -135,7 +129,6 @@ namespace ShoppingPlatform.Repositories
             await _collection.ReplaceOneAsync(filter, product);
         }
 
-        // Soft delete: mark IsDeleted true and IsActive false
         public async Task DeleteAsync(string id)
         {
             var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
@@ -146,6 +139,9 @@ namespace ShoppingPlatform.Repositories
             await _collection.UpdateOneAsync(filter, update);
         }
 
+        // -----------------------
+        // Images & Reviews
+        // -----------------------
         public async Task AddImageAsync(string id, ProductImage image)
         {
             var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
@@ -156,8 +152,6 @@ namespace ShoppingPlatform.Repositories
         public async Task<bool> RemoveImageAsync(string id, string keyOrUrl)
         {
             var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
-
-            // Pull images where url == keyOrUrl OR thumbnailUrl == keyOrUrl
             var pull = Builders<Product>.Update.PullFilter(p => p.Images,
                 Builders<ProductImage>.Filter.Or(
                     Builders<ProductImage>.Filter.Eq(i => i.Url, keyOrUrl),
@@ -179,28 +173,28 @@ namespace ShoppingPlatform.Repositories
             await _collection.UpdateOneAsync(filter, update);
         }
 
+        // -----------------------
+        // Category aggregation (fixed: no legacy Category reference)
+        // -----------------------
         public async Task<List<CategoryCount>> GetCategoriesAsync()
         {
-            // Project each product to a single 'category' value:
-            // prefer productMainCategory if non-empty, otherwise fallback to legacy category
+            // prefer ProductMainCategory if present; otherwise fallback to ProductCategory
             var projected = _collection.Aggregate()
                 .Project(p => new
                 {
-                    Category = string.IsNullOrEmpty(p.ProductMainCategory) ? p.Category : p.ProductMainCategory
+                    Category = string.IsNullOrEmpty(p.ProductMainCategory) ? p.ProductCategory : p.ProductMainCategory
                 });
 
-            // Group by the projected category and count documents per group
             var grouped = await projected
                 .Group(
                     key => key.Category,
                     g => new
                     {
                         Category = g.Key,
-                        Count = g.Count()
+                        Count = g.Count()    // <-- use Count() method
                     })
                 .ToListAsync();
 
-            // Map to DTO
             var list = grouped
                 .Select(g => new CategoryCount { Category = g.Category ?? string.Empty, Count = g.Count })
                 .ToList();
@@ -208,10 +202,163 @@ namespace ShoppingPlatform.Repositories
             return list;
         }
 
+        // -----------------------
+        // INVENTORY-BASED operations
+        // -----------------------
 
+        public async Task<bool> IsAvailableAsync(string productId, string size, string color, int requiredQty = 1)
+        {
+            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(size) || string.IsNullOrWhiteSpace(color))
+                return false;
+
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productId),
+                Builders<Product>.Filter.ElemMatch(p => p.Inventory,
+                    Builders<InventoryItem>.Filter.And(
+                        Builders<InventoryItem>.Filter.Eq(i => i.Size, size),
+                        Builders<InventoryItem>.Filter.Eq(i => i.Color, color),
+                        Builders<InventoryItem>.Filter.Gte(i => i.Quantity, requiredQty)
+                    )
+                )
+            );
+
+            var projection = Builders<Product>.Projection.Include(p => p.Id);
+            var doc = await _collection.Find(filter).Project<Product>(projection).FirstOrDefaultAsync();
+            return doc != null;
+        }
+
+        public async Task<bool> TryReserveInventoryAsync(string productId, string size, string color, int qtyToReserve)
+        {
+            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(size) || string.IsNullOrWhiteSpace(color))
+                return false;
+            if (qtyToReserve <= 0) return false;
+
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productId),
+                Builders<Product>.Filter.ElemMatch(p => p.Inventory,
+                    Builders<InventoryItem>.Filter.And(
+                        Builders<InventoryItem>.Filter.Eq(i => i.Size, size),
+                        Builders<InventoryItem>.Filter.Eq(i => i.Color, color),
+                        Builders<InventoryItem>.Filter.Gte(i => i.Quantity, qtyToReserve)
+                    )
+                )
+            );
+
+            var update = Builders<Product>.Update
+                .Inc("inventory.$.quantity", -qtyToReserve)
+                .Inc("inventory.$.reserved", qtyToReserve)
+                .Set("inventory.$.updatedAt", DateTime.UtcNow)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _collection.UpdateOneAsync(filter, update);
+            return result.ModifiedCount > 0;
+        }
+
+        public async Task<bool> ReleaseReservationAsync(string productId, string size, string color, int qty)
+        {
+            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(size) || string.IsNullOrWhiteSpace(color))
+                return false;
+            if (qty <= 0) return false;
+
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productId),
+                Builders<Product>.Filter.ElemMatch(p => p.Inventory,
+                    Builders<InventoryItem>.Filter.And(
+                        Builders<InventoryItem>.Filter.Eq(i => i.Size, size),
+                        Builders<InventoryItem>.Filter.Eq(i => i.Color, color),
+                        Builders<InventoryItem>.Filter.Gte(i => i.Reserved, qty)
+                    )
+                )
+            );
+
+            var update = Builders<Product>.Update
+                .Inc("inventory.$.quantity", qty)
+                .Inc("inventory.$.reserved", -qty)
+                .Set("inventory.$.updatedAt", DateTime.UtcNow)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _collection.UpdateOneAsync(filter, update);
+            return result.ModifiedCount > 0;
+        }
+
+        public async Task<bool> DecrementInventoryAsync(string productId, string size, string color, int qty)
+        {
+            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(size) || string.IsNullOrWhiteSpace(color))
+                return false;
+            if (qty <= 0) return false;
+
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productId),
+                Builders<Product>.Filter.ElemMatch(p => p.Inventory,
+                    Builders<InventoryItem>.Filter.And(
+                        Builders<InventoryItem>.Filter.Eq(i => i.Size, size),
+                        Builders<InventoryItem>.Filter.Eq(i => i.Color, color),
+                        Builders<InventoryItem>.Filter.Gte(i => i.Quantity, qty)
+                    )
+                )
+            );
+
+            var update = Builders<Product>.Update
+                .Inc("inventory.$.quantity", -qty)
+                .Set("inventory.$.updatedAt", DateTime.UtcNow)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _collection.UpdateOneAsync(filter, update);
+            return result.ModifiedCount > 0;
+        }
+
+        public async Task<bool> IncrementInventoryAsync(string productId, string size, string color, int qty)
+        {
+            if (string.IsNullOrWhiteSpace(productId) || string.IsNullOrWhiteSpace(size) || string.IsNullOrWhiteSpace(color))
+                return false;
+            if (qty <= 0) return false;
+
+            var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
+
+            var updateExisting = Builders<Product>.Update
+                .Inc("inventory.$[inv].quantity", qty)
+                .Set("inventory.$[inv].updatedAt", DateTime.UtcNow)
+                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+            var arrayFilters = new List<ArrayFilterDefinition>
+            {
+                new JsonArrayFilterDefinition<InventoryItem>("{ 'inv.size': '" + size + "', 'inv.color': '" + color + "' }")
+            };
+
+            var options = new UpdateOptions { ArrayFilters = arrayFilters };
+
+            var res = await _collection.UpdateOneAsync(filter, updateExisting, options);
+            if (res.ModifiedCount > 0) return true;
+
+            var newItem = new InventoryItem
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Size = size,
+                Color = color,
+                Quantity = qty,
+                Reserved = 0,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var push = Builders<Product>.Update.Push(p => p.Inventory, newItem).Set(p => p.UpdatedAt, DateTime.UtcNow);
+            var pushRes = await _collection.UpdateOneAsync(filter, push);
+            return pushRes.ModifiedCount > 0;
+        }
+
+        // -----------------------
+        // Variant wrappers
+        // -----------------------
         public async Task<bool> TryDecrementVariantQuantityAsync(string productId, string variantSku, int qty)
         {
-            // Ensure variant exists with enough quantity then decrement using arrayFilters
+            var product = await GetByIdAsync(productId);
+            if (product == null) return false;
+
+            var variant = product.Variants?.FirstOrDefault(v => string.Equals(v.Sku, variantSku, StringComparison.OrdinalIgnoreCase));
+            if (variant != null && !string.IsNullOrWhiteSpace(variant.Size) && !string.IsNullOrWhiteSpace(variant.Color))
+            {
+                return await DecrementInventoryAsync(productId, variant.Size, variant.Color, qty);
+            }
+
             var filter = Builders<Product>.Filter.And(
                 Builders<Product>.Filter.Eq(p => p.Id, productId),
                 Builders<Product>.Filter.ElemMatch(p => p.Variants, v => v.Sku == variantSku && v.Quantity >= qty)
@@ -234,6 +381,15 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> IncrementVariantQuantityAsync(string productId, string variantSku, int qty)
         {
+            var product = await GetByIdAsync(productId);
+            if (product == null) return false;
+
+            var variant = product.Variants?.FirstOrDefault(v => string.Equals(v.Sku, variantSku, StringComparison.OrdinalIgnoreCase));
+            if (variant != null && !string.IsNullOrWhiteSpace(variant.Size) && !string.IsNullOrWhiteSpace(variant.Color))
+            {
+                return await IncrementInventoryAsync(productId, variant.Size, variant.Color, qty);
+            }
+
             var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
 
             var update = Builders<Product>.Update
@@ -251,33 +407,18 @@ namespace ShoppingPlatform.Repositories
             return result.ModifiedCount > 0;
         }
 
-        // Return pending reviews (flattened reviews). Pagination supported.
+        // -----------------------
+        // Pending reviews / approve / reject
+        // -----------------------
         public async Task<IEnumerable<Review>> GetPendingReviewsAsync(int page = 1, int pageSize = 50)
         {
-            // Aggregate: unwind reviews, match approved==false, skip/limit, project review fields
-            var unwind = new BsonDocument
-            {
-                { "$unwind", "$reviews" }
-            };
-            var match = new BsonDocument
-            {
-                { "$match", new BsonDocument("reviews.approved", false) }
-            };
-            var project = new BsonDocument
-            {
-                { "$replaceRoot", new BsonDocument("newRoot", "$reviews") }
-            };
+            var unwind = new BsonDocument { { "$unwind", "$reviews" } };
+            var match = new BsonDocument { { "$match", new BsonDocument("reviews.approved", false) } };
+            var project = new BsonDocument { { "$replaceRoot", new BsonDocument("newRoot", "$reviews") } };
             var skip = new BsonDocument { { "$skip", (page - 1) * pageSize } };
             var limit = new BsonDocument { { "$limit", pageSize } };
 
-            var pipeline = new[]
-            {
-                unwind,
-                match,
-                project,
-                skip,
-                limit
-            };
+            var pipeline = new[] { unwind, match, project, skip, limit };
 
             var cursor = await _collection.AggregateAsync<Review>(pipeline);
             var list = await cursor.ToListAsync();
@@ -286,7 +427,6 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> ApproveReviewAsync(string productId, string reviewId)
         {
-            // Set reviews.$[r].approved = true where reviews.id == reviewId
             var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
             var update = Builders<Product>.Update.Set("reviews.$[r].approved", true).Set(p => p.UpdatedAt, DateTime.UtcNow);
 
@@ -304,7 +444,6 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> RejectReviewAsync(string productId, string reviewId)
         {
-            // Remove the review from the array
             var filter = Builders<Product>.Filter.Eq(p => p.Id, productId);
             var update = Builders<Product>.Update.PullFilter(p => p.Reviews, r => r.Id == reviewId).Set(p => p.UpdatedAt, DateTime.UtcNow);
 

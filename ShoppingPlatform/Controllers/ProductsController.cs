@@ -51,15 +51,7 @@ namespace ShoppingPlatform.Controllers
             if (page <= 0) page = 1;
             if (pageSize <= 0) pageSize = 20;
 
-            // Call the repository using the original signature you had earlier.
-            // Expectation: QueryAsync returns a tuple (List<ProductListItemDto> items, long total)
-            // If your repo returns different types, tell me exact signature and I'll update this.
             var (items, total) = await _repo.QueryAsync(q, category, minPrice, maxPrice, page, pageSize, sort);
-
-            // If your repository returns domain Product objects instead of DTOs, switch to:
-            // var (products, total) = await _repo.QueryAsync(...);
-            // var items = ProductMappings.ToListItemDtos(products, country);
-            // but since your repo originally returned DTOs, we map directly.
 
             var paged = new PagedResult<ProductListItemDto>
             {
@@ -102,6 +94,11 @@ namespace ShoppingPlatform.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<ActionResult<ApiResponse<Product>>> Create([FromBody] Product product)
         {
+            if (product == null)
+            {
+                return BadRequest(ApiResponse<Product>.Fail("Product body required", null, HttpStatusCode.BadRequest));
+            }
+
             // Validate mandatory productMainCategory
             if (string.IsNullOrWhiteSpace(product.ProductMainCategory))
             {
@@ -114,15 +111,8 @@ namespace ShoppingPlatform.Controllers
             product.CreatedAt = DateTime.UtcNow;
             product.UpdatedAt = DateTime.UtcNow;
 
-            // Ensure price list item ids exist
-            if (product.PriceList != null)
-            {
-                foreach (var p in product.PriceList)
-                {
-                    if (string.IsNullOrWhiteSpace(p.Id))
-                        p.Id = Guid.NewGuid().ToString("N");
-                }
-            }
+            // Ensure nested IDs exist
+            EnsureEntityIds(product);
 
             await _repo.CreateAsync(product);
 
@@ -138,6 +128,11 @@ namespace ShoppingPlatform.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<ActionResult<ApiResponse<object>>> Update(string id, [FromBody] Product updated)
         {
+            if (updated == null)
+            {
+                return BadRequest(ApiResponse<object>.Fail("Product body required", null, HttpStatusCode.BadRequest));
+            }
+
             var existing = await _repo.GetByIdAsync(id);
             if (existing == null)
             {
@@ -154,14 +149,7 @@ namespace ShoppingPlatform.Controllers
             updated.Id = id;
             updated.UpdatedAt = DateTime.UtcNow;
 
-            if (updated.PriceList != null)
-            {
-                foreach (var p in updated.PriceList)
-                {
-                    if (string.IsNullOrWhiteSpace(p.Id))
-                        p.Id = Guid.NewGuid().ToString("N");
-                }
-            }
+            EnsureEntityIds(updated);
 
             await _repo.UpdateAsync(updated);
 
@@ -209,8 +197,11 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpPost("{id}/images")]
         [Authorize(Roles = "Admin")]
-        public async Task<ActionResult<ApiResponse<ProductImage>>> AttachImage(string id, [FromBody] ProductImage image)
+        public async Task<ActionResult<ApiResponse<ProductImage>>> AttachImage(string id, [FromBody] ProductImageRequest imageReq)
         {
+            if (imageReq == null)
+                return BadRequest(ApiResponse<ProductImage>.Fail("Image payload required", null, HttpStatusCode.BadRequest));
+
             var product = await _repo.GetByIdAsync(id);
             if (product == null)
             {
@@ -218,7 +209,16 @@ namespace ShoppingPlatform.Controllers
                 return NotFound(notFound);
             }
 
-            image.UploadedAt = DateTime.UtcNow;
+            var image = new ProductImage
+            {
+                Url = imageReq.Url,
+                ThumbnailUrl = imageReq.ThumbnailUrl,
+                Alt = imageReq.Alt,
+                UploadedByUserId = imageReq.UploadedByUserId,
+                UploadedAt = DateTime.UtcNow
+            };
+
+            // Ensure image fields valid
             await _repo.AddImageAsync(id, image);
 
             var ok = ApiResponse<ProductImage>.Ok(image, "Image attached");
@@ -226,27 +226,37 @@ namespace ShoppingPlatform.Controllers
         }
 
         // -------------------------------------------
-        // POST: api/products/{id}/reviews}
+        // POST: api/products/{id}/reviews
         // -------------------------------------------
         [HttpPost("{id}/reviews")]
         [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> AddReview(string id, [FromBody] Review review)
+        public async Task<ActionResult<ApiResponse<object>>> AddReview(string id, [FromBody] ReviewRequest reviewReq)
         {
+            if (reviewReq == null)
+                return BadRequest(ApiResponse<object>.Fail("Review required", null, HttpStatusCode.BadRequest));
+
+            var product = await _repo.GetByIdAsync(id);
+            if (product == null)
+            {
+                var notFound = ApiResponse<object>.Fail("Product not found", null, HttpStatusCode.NotFound);
+                return NotFound(notFound);
+            }
+
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
-            review.UserId = userId;
-            review.CreatedAt = DateTime.UtcNow;
-            review.Approved = false;
+
+            var review = new Review
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                UserId = userId,
+                Rating = reviewReq.Rating,
+                Comment = reviewReq.Comment,
+                CreatedAt = DateTime.UtcNow,
+                Approved = false
+            };
 
             await _repo.AddReviewAsync(id, review);
 
-            var accepted = new ApiResponse<object>
-            {
-                Success = true,
-                Status = HttpStatusCode.Accepted,
-                Message = "Review submitted for moderation",
-                Data = null
-            };
-
+            var accepted = ApiResponse<object>.Ok(null, "Review submitted for moderation");
             return Accepted(accepted);
         }
 
@@ -287,5 +297,102 @@ namespace ShoppingPlatform.Controllers
             var ok = ApiResponse<List<CategoryCount>>.Ok(cats, "OK");
             return Ok(ok);
         }
+
+        // -------------------------
+        // Helper: ensure nested ids exist (PriceList, CountryPrices, Inventory, Variants, Spec extra, Reviews, Images)
+        // -------------------------
+        private void EnsureEntityIds(Product product)
+        {
+            if (product.PriceList != null)
+            {
+                foreach (var p in product.PriceList)
+                {
+                    if (string.IsNullOrWhiteSpace(p.Id))
+                        p.Id = Guid.NewGuid().ToString("N");
+                }
+            }
+
+            if (product.CountryPrices != null)
+            {
+                foreach (var cp in product.CountryPrices)
+                {
+                    if (string.IsNullOrWhiteSpace(cp.Id))
+                        cp.Id = Guid.NewGuid().ToString("N");
+                }
+            }
+
+            if (product.Inventory != null)
+            {
+                foreach (var inv in product.Inventory)
+                {
+                    if (string.IsNullOrWhiteSpace(inv.Id))
+                        inv.Id = Guid.NewGuid().ToString("N");
+                    inv.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+
+            if (product.Variants != null)
+            {
+                foreach (var v in product.Variants)
+                {
+                    if (string.IsNullOrWhiteSpace(v.Id))
+                        v.Id = Guid.NewGuid().ToString("N");
+                    if (v.Images != null)
+                    {
+                        foreach (var img in v.Images)
+                        {
+                            if (img.UploadedAt == default)
+                                img.UploadedAt = DateTime.UtcNow;
+                        }
+                    }
+                }
+            }
+
+            if (product.Specifications?.Extra != null)
+            {
+                foreach (var f in product.Specifications.Extra)
+                {
+                    if (string.IsNullOrWhiteSpace(f.Id))
+                        f.Id = Guid.NewGuid().ToString("N");
+                }
+            }
+
+            if (product.Reviews != null)
+            {
+                foreach (var r in product.Reviews)
+                {
+                    if (string.IsNullOrWhiteSpace(r.Id))
+                        r.Id = Guid.NewGuid().ToString("N");
+                    if (r.CreatedAt == default)
+                        r.CreatedAt = DateTime.UtcNow;
+                }
+            }
+
+            if (product.Images != null)
+            {
+                foreach (var img in product.Images)
+                {
+                    if (img.UploadedAt == default)
+                        img.UploadedAt = DateTime.UtcNow;
+                }
+            }
+        }
+    }
+
+    // -------------------------
+    // Small request/response DTOs used by controller
+    // -------------------------
+    public class ProductImageRequest
+    {
+        public string Url { get; set; } = string.Empty;
+        public string? ThumbnailUrl { get; set; }
+        public string? Alt { get; set; }
+        public string? UploadedByUserId { get; set; }
+    }
+
+    public class ReviewRequest
+    {
+        public int Rating { get; set; }
+        public string Comment { get; set; } = string.Empty;
     }
 }

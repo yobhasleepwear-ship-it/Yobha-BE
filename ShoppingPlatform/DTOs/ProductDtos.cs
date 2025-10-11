@@ -7,52 +7,60 @@ namespace ShoppingPlatform.Dto
     // List item shown in product listing
     public class ProductListItemDto
     {
-        public string Id { get; set; } = null!;
-        public string ProductId { get; set; } = string.Empty;   // readable PID (new)
-        public string Name { get; set; } = null!;
+        public string Id { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
         public decimal Price { get; set; }
-        public string Category { get; set; } = null!;
-        public List<string> Images { get; set; } = new();
+        public string Category { get; set; } = string.Empty;
+        public List<string> Images { get; set; } = new List<string>();
         public bool Available { get; set; } = false;
         public string ProductMainCategory { get; set; } = string.Empty;
+
+        // NEW: expose available swatches / sizes for frontend
+        public List<string> AvailableColors { get; set; } = new List<string>();
+        public List<string> AvailableSizes { get; set; } = new List<string>();
     }
 
     // Full product detail returned by GET /api/products/{id}
     public class ProductDetailDto
     {
-        public string Id { get; set; } = null!;
-        public string ProductId { get; set; } = string.Empty;   // readable PID included
-        public string Name { get; set; } = null!;
+        public string Id { get; set; } = string.Empty;
+        public string ProductId { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
         public string Slug { get; set; } = string.Empty;
-        public string Description { get; set; } = null!;
-        public List<ProductImage> Images { get; set; } = new();
-        public List<ProductVariant> Variants { get; set; } = new();
-        public Dictionary<string, decimal> Prices { get; set; } = new();   // country -> price mapping
-        public List<string> Colors { get; set; } = new();                 // distinct colors from variants
-        public List<string> VariantSkus { get; set; } = new();            // skus from variants
+        public string Description { get; set; } = string.Empty;
 
-        // NEW fields added to match updated Product model
+        public List<ProductImage> Images { get; set; } = new List<ProductImage>();
+        public List<ProductVariant> Variants { get; set; } = new List<ProductVariant>();
+
+        // Prices keyed by country or "default"
+        public Dictionary<string, decimal> Prices { get; set; } = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+
+        public List<string> Colors { get; set; } = new List<string>();
+        public List<string> VariantSkus { get; set; } = new List<string>();
+
         public string ProductMainCategory { get; set; } = string.Empty;
         public string ProductCategory { get; set; } = string.Empty;
         public string ProductSubCategory { get; set; } = string.Empty;
-        public List<string> SizeOfProduct { get; set; } = new();
-        public List<string> FabricType { get; set; } = new();
-        public List<string> ProductVariationIds { get; set; } = new();
 
-        // review & metadata fields
+        public List<string> SizeOfProduct { get; set; } = new List<string>();
+        public List<string> FabricType { get; set; } = new List<string>();
+        public List<string> ProductVariationIds { get; set; } = new List<string>();
+
         public double AverageRating { get; set; } = 0.0;
         public int ReviewCount { get; set; } = 0;
-        public List<Review> Reviews { get; set; } = new();
+        public List<Review> Reviews { get; set; } = new List<Review>();
 
-        // flags / admin fields
         public bool IsFeatured { get; set; } = false;
         public int SalesCount { get; set; } = 0;
         public bool IsActive { get; set; } = true;
         public bool IsDeleted { get; set; } = false;
 
-        // timestamps
         public DateTime CreatedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
+
+        // NEW: include inventory details so frontend can know per (size,color) quantities
+        public List<InventoryItem> Inventory { get; set; } = new List<InventoryItem>();
     }
 
     public class CategoryCount
