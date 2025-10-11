@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ShoppingPlatform.Configurations;
@@ -13,32 +15,32 @@ namespace ShoppingPlatform.Services
         private readonly string _apiKey;
         private readonly ILogger<TwoFactorSmsSender> _logger;
 
-        public TwoFactorSmsSender(TwoFactorService svc, IOptions<TwoFactorSettings> opts, IConfiguration configuration, ILogger<TwoFactorSmsSender> logger)
+        public TwoFactorSmsSender(
+            TwoFactorService svc,
+            IOptions<TwoFactorSettings> opts,
+            IConfiguration configuration,
+            ILogger<TwoFactorSmsSender> logger)
         {
             _svc = svc ?? throw new ArgumentNullException(nameof(svc));
             _cfg = opts?.Value ?? new TwoFactorSettings();
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-            // Prefer normal config section binding (TwoFactor:ApiKey)
-            // Then try environment fallbacks (double underscore for section binding, older single underscore)
-            var fromConfigSection = configuration["TwoFactor:ApiKey"];
-            var fromEnvDoubleUnderscore = Environment.GetEnvironmentVariable("TWOFACTOR__APIKEY");
-            var fromEnvSingleUnderscore = Environment.GetEnvironmentVariable("TWOFACTOR_APIKEY");
+            // Load API key from multiple possible sources
+            var fromConfig = configuration["TwoFactor:ApiKey"];
+            var fromSettings = _cfg?.ApiKey;
+            var fromEnvDouble = Environment.GetEnvironmentVariable("TWOFACTOR__APIKEY");
+            var fromEnvSingle = Environment.GetEnvironmentVariable("TWOFACTOR_APIKEY");
 
-            _apiKey = !string.IsNullOrWhiteSpace(fromConfigSection) ? fromConfigSection
-                    : !string.IsNullOrWhiteSpace(_cfg?.ApiKey) ? _cfg.ApiKey!
-                    : !string.IsNullOrWhiteSpace(fromEnvDoubleUnderscore) ? fromEnvDoubleUnderscore
-                    : fromEnvSingleUnderscore ?? string.Empty;
+            _apiKey = !string.IsNullOrWhiteSpace(fromConfig) ? fromConfig
+                    : !string.IsNullOrWhiteSpace(fromSettings) ? fromSettings!
+                    : !string.IsNullOrWhiteSpace(fromEnvDouble) ? fromEnvDouble
+                    : fromEnvSingle ?? string.Empty;
 
-            // Log presence (not the value)
+            // Log presence
             if (string.IsNullOrWhiteSpace(_apiKey))
-            {
-                _logger.LogError("TwoFactor API key is not configured. Checked: TwoFactor:ApiKey, TwoFactorSettings.ApiKey, TWOFACTOR__APIKEY, TWOFACTOR_APIKEY.");
-            }
+                _logger.LogError("TwoFactor API key not found in any source.");
             else
-            {
-                _logger.LogInformation("TwoFactor API key loaded (length={Length}).", _apiKey.Length);
-            }
+                _logger.LogInformation("TwoFactor API key loaded successfully (length={len})", _apiKey.Length);
         }
 
         public async Task<string> SendOtpAsync(string phoneNumber)
@@ -46,8 +48,31 @@ namespace ShoppingPlatform.Services
             if (string.IsNullOrWhiteSpace(_apiKey))
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
 
-            // you may want to normalize phone number here (ensure country code)
-            return await _svc.SendOtpAsync(_apiKey, phoneNumber, _cfg?.SenderId);
+            // Generate random OTP (DLT VAR2)
+            var otp = new Random().Next(100000, 999999).ToString();
+
+            _logger.LogInformation("Sending OTP via TwoFactor -> Phone={phone}, OTP={otpMasked}", phoneNumber, "******");
+
+            try
+            {
+                // Use approved template (must match DLT)
+                string sessionId = await _svc.SendOtpAsync(
+                    _apiKey,
+                    phoneNumber,
+                    _cfg?.SenderId ?? "YOBHAS",
+                    _cfg?.TemplateName ?? "OTPSendTemplate1",
+                    var1: "Customer",
+                    var2: otp
+                );
+
+                _logger.LogInformation("OTP sent successfully. SessionId={sessionId}", sessionId);
+                return sessionId;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send OTP via 2Factor for {phone}", phoneNumber);
+                throw;
+            }
         }
 
         public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
@@ -55,7 +80,17 @@ namespace ShoppingPlatform.Services
             if (string.IsNullOrWhiteSpace(_apiKey))
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
 
-            return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+            try
+            {
+                bool success = await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+                _logger.LogInformation("OTP verification result={result} for Session={session}", success, sessionId);
+                return success;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to verify OTP for session {session}", sessionId);
+                return false;
+            }
         }
     }
 }

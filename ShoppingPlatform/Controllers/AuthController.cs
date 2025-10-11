@@ -277,27 +277,49 @@ namespace ShoppingPlatform.Controllers
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<object>>> SendOtp([FromBody] SendOtpDto dto)
         {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.PhoneNumber))
+                return BadRequest(ApiResponse<object>.Fail("phoneNumber is required", null, HttpStatusCode.BadRequest));
+
             try
             {
-                // Call the new 2Factor-based SMS service
-                var sessionId = await _sms.SendOtpAsync(dto.PhoneNumber);
+                // Call sms service which will generate OTP and call provider
+                var result = await _sms.SendOtpAsync(dto.PhoneNumber);
 
-                // (Optional) Save sessionId for verification tracking in DB
+                // Save sessionId and provider meta for tracking
                 var entry = new OtpEntry
                 {
                     PhoneNumber = dto.PhoneNumber,
-                    SessionId = sessionId,
+                    SessionId = result.SessionId,
+                    ProviderMessageId = result.ProviderMessageId,
+                    ProviderStatus = result.ProviderStatus,
+                    ProviderRawResponse = result.RawResponse,
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
                 };
                 await _otps.CreateAsync(entry);
 
-                var data = new { sessionId };
+                // Return structured response (useful for debugging)
+                var data = new
+                {
+                    sessionId = result.SessionId,
+                    providerStatus = result.ProviderStatus,
+                    providerMessageId = result.ProviderMessageId
+                };
+
+                if (!result.IsSuccess)
+                {
+                    // Provider rejected - return 502 with provider info
+                    return StatusCode((int)HttpStatusCode.BadGateway,
+                        ApiResponse<object>.Fail("Provider rejected SMS", data, HttpStatusCode.BadGateway));
+                }
+
                 return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
             }
             catch (Exception ex)
             {
-                var resp = ApiResponse<string>.Fail($"Failed to send OTP: {ex.Message}", null, HttpStatusCode.InternalServerError);
+                // log exception with stack trace
+                _logger.LogError(ex, "SendOtp failed for phone {phone}", dto?.PhoneNumber);
+                var resp = ApiResponse<object>.Fail($"Failed to send OTP: {ex.Message}", null, HttpStatusCode.InternalServerError);
                 return StatusCode((int)HttpStatusCode.InternalServerError, resp);
             }
         }
