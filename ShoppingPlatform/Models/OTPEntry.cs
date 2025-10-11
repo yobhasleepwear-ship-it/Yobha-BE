@@ -6,27 +6,19 @@ namespace ShoppingPlatform.Models
 {
     public class OtpEntry
     {
-        [BsonId]
-        [BsonRepresentation(BsonType.ObjectId)]
-        public string? Id { get; set; }
-
-        [BsonElement("phoneNumber")]
+        public string Id { get; set; } = string.Empty;
         public string PhoneNumber { get; set; } = string.Empty;
-
-        [BsonElement("sessionId")]
-        public string? SessionId { get; set; }
-
-        [BsonElement("used")]
-        public bool Used { get; set; } = false;
-
-        [BsonElement("expiresAt")]
+        public string SessionId { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
         public DateTime ExpiresAt { get; set; }
 
-        [BsonElement("createdAt")]
-        public DateTime CreatedAt { get; set; }
+        // Provider diagnostic fields (optional but useful)
+        public string? ProviderStatus { get; set; }
+        public string? ProviderMessageId { get; set; }
+        public string? ProviderRawResponse { get; set; }
 
-        // 👇 Added for attempt tracking (even if 2Factor handles OTP logic)
-        [BsonElement("attempts")]
-        public int Attempts { get; set; } = 0;
+        // free text field
+        public string? Note { get; set; }
     }
+
 }

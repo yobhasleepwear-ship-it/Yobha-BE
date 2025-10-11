@@ -27,6 +27,8 @@ namespace ShoppingPlatform.Controllers
         private readonly InviteRepository _invites;
         private readonly GoogleSettings _googleSettings;
         private readonly IConfiguration _config;
+        private readonly ILogger<AuthController> _logger;
+
 
         public AuthController(
             UserRepository users,
@@ -35,7 +37,8 @@ namespace ShoppingPlatform.Controllers
             JwtService jwt,
             InviteRepository invites,
             IOptions<GoogleSettings> googleOptions,
-            IConfiguration config)
+            IConfiguration config,
+             ILogger<AuthController> logger)
         {
             _users = users;
             _otps = otps;
@@ -44,6 +47,7 @@ namespace ShoppingPlatform.Controllers
             _invites = invites;
             _googleSettings = googleOptions.Value;
             _config = config;
+            _logger = logger;
         }
 
         // -----------------------
@@ -278,49 +282,57 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<object>>> SendOtp([FromBody] SendOtpDto dto)
         {
             if (dto == null || string.IsNullOrWhiteSpace(dto.PhoneNumber))
-                return BadRequest(ApiResponse<object>.Fail("phoneNumber is required", null, HttpStatusCode.BadRequest));
+            {
+                var errors = new List<string> { "phoneNumber is required" };
+                return BadRequest(ApiResponse<object>.Fail("Invalid request", errors, System.Net.HttpStatusCode.BadRequest));
+            }
 
             try
             {
-                // Call sms service which will generate OTP and call provider
-                var result = await _sms.SendOtpAsync(dto.PhoneNumber);
+                // call sms sender -> returns ProviderResult
+                var providerResult = await _sms.SendOtpAsync(dto.PhoneNumber);
 
-                // Save sessionId and provider meta for tracking
+                // build DB OtpEntry - if your OtpEntry has no provider columns, store provider info in Note or skip
                 var entry = new OtpEntry
                 {
                     PhoneNumber = dto.PhoneNumber,
-                    SessionId = result.SessionId,
-                    ProviderMessageId = result.ProviderMessageId,
-                    ProviderStatus = result.ProviderStatus,
-                    ProviderRawResponse = result.RawResponse,
+                    SessionId = providerResult.SessionId,
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
                 };
+
+                // if your OtpEntry supports provider fields, set them; otherwise you can store provider metadata in Note
+                // Example: if OtpEntry has ProviderStatus / ProviderMessageId / ProviderRawResponse
+                // entry.ProviderStatus = providerResult.ProviderStatus;
+                // entry.ProviderMessageId = providerResult.ProviderMessageId;
+                // entry.ProviderRawResponse = providerResult.RawResponse;
+
+                // If OtpEntry doesn't have these properties, you can use entry.Note (or similar) — adapt as needed:
+                // entry.Note = $"providerStatus={providerResult.ProviderStatus}; messageId={providerResult.ProviderMessageId}";
+
                 await _otps.CreateAsync(entry);
 
-                // Return structured response (useful for debugging)
                 var data = new
                 {
-                    sessionId = result.SessionId,
-                    providerStatus = result.ProviderStatus,
-                    providerMessageId = result.ProviderMessageId
+                    sessionId = providerResult.SessionId,
+                    providerStatus = providerResult.ProviderStatus,
+                    providerMessageId = providerResult.ProviderMessageId
                 };
 
-                if (!result.IsSuccess)
+                if (!providerResult.IsSuccess)
                 {
-                    // Provider rejected - return 502 with provider info
-                    return StatusCode((int)HttpStatusCode.BadGateway,
-                        ApiResponse<object>.Fail("Provider rejected SMS", data, HttpStatusCode.BadGateway));
+                    // convert provider info into error list for ApiResponse.Fail — keep simple string(s)
+                    var errors = new List<string> { $"providerStatus={providerResult.ProviderStatus}", $"details={providerResult.RawResponse}" };
+                    return StatusCode((int)System.Net.HttpStatusCode.BadGateway, ApiResponse<object>.Fail("Provider rejected SMS", errors, System.Net.HttpStatusCode.BadGateway));
                 }
 
                 return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
             }
             catch (Exception ex)
             {
-                // log exception with stack trace
                 _logger.LogError(ex, "SendOtp failed for phone {phone}", dto?.PhoneNumber);
-                var resp = ApiResponse<object>.Fail($"Failed to send OTP: {ex.Message}", null, HttpStatusCode.InternalServerError);
-                return StatusCode((int)HttpStatusCode.InternalServerError, resp);
+                var errors = new List<string> { ex.Message };
+                return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, ApiResponse<object>.Fail("Failed to send OTP", errors, System.Net.HttpStatusCode.InternalServerError));
             }
         }
 

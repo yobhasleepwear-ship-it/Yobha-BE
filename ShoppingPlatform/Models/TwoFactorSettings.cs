@@ -4,7 +4,7 @@
     {
         public string? ApiKey { get; set; }
         public string? SenderId { get; set; }
-        public string? TemplateId { get; set; }
-        public string? BaseUrl { get; set; } = "https://2factor.in";
+        public string? TemplateName { get; set; }    // optional: e.g. "OTPSendTemplate1"
+        public string? DefaultVar1 { get; set; }     // optional: default name placeholder
     }
 }
