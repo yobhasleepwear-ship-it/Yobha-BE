@@ -63,6 +63,7 @@ namespace ShoppingPlatform.Services
             var var1 = _cfg?.DefaultVar1 ?? "Customer";
             var var2 = otp;
 
+            _logger.LogInformation("SendOtpAsync=" + _apiKey+"-"+phoneNumber+"-"+ (_cfg?.TemplateName ?? "OTPSendTemplate1")+ var1+var2, phoneNumber);
             var result = await _svc.SendOtpAsync(_apiKey, phoneNumber, _cfg?.SenderId ?? "YOBHAS", _cfg?.TemplateName ?? "OTPSendTemplate1", var1, var2);
 
             // attach OTP to result.RawResponse? careful in prod (avoid storing OTP in logs)

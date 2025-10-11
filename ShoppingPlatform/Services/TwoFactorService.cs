@@ -64,7 +64,7 @@ namespace ShoppingPlatform.Sms
                 return new string('*', s.Length - showRight) + s[^showRight..];
             }
 
-            _logger.LogInformation("TwoFactor.SendOtp -> sending to {to} template={template} apiKey={keyMasked}", normalizedPhone, templateName, Mask(apiKey));
+            _logger.LogInformation("TwoFactor.SendOtp -> sending to {to} template={template} apiKey={keyMasked}", normalizedPhone, templateName, apiKey);
             _logger.LogDebug("TwoFactor.SendOtp payload: {payload}", json);
 
             var resp = await _http.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
