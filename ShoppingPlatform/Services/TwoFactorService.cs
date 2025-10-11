@@ -1,6 +1,7 @@
 ﻿// File: Sms/TwoFactorService.cs
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using ShoppingPlatform.DTOs;
 using System;
 using System.Net.Http;
@@ -23,57 +24,65 @@ namespace ShoppingPlatform.Sms
 
         // POST template SMS and return ProviderResult
         public async Task<ProviderResult> SendOtpAsync(
-            string apiKey,
-            string phoneNumber,
-            string? senderId = "YOBHAS",
-            string templateName = "OTPSendTemplate1",
-            string? var1 = null,
-            string? var2 = null)
+    string apiKey,
+    string phoneNumber,
+    string? senderId = "YOBHAS",
+    string templateName = "OTPSendTemplate1",
+    string? var1 = null,
+    string? var2 = null)
         {
-            if (string.IsNullOrWhiteSpace(apiKey)) throw new ArgumentException("apiKey");
-            if (string.IsNullOrWhiteSpace(phoneNumber)) throw new ArgumentException("phoneNumber");
+            if (string.IsNullOrWhiteSpace(apiKey)) throw new ArgumentException(nameof(apiKey));
+            if (string.IsNullOrWhiteSpace(phoneNumber)) throw new ArgumentException(nameof(phoneNumber));
 
-            // normalize phone (E.164-ish)
-            string NormalizePhone(string phone)
+            static string NormalizePhone(string phone)
             {
                 var digits = Regex.Replace(phone ?? string.Empty, @"\D", "");
                 if (digits.Length == 10) return "91" + digits;
-                if (digits.StartsWith("0") && digits.Length == 11) return "91" + digits.Substring(1);
+                if (digits.Length == 11 && digits.StartsWith("0")) return "91" + digits.Substring(1);
+                if (digits.StartsWith("91") && digits.Length >= 12) return digits;
                 return digits;
             }
             var normalizedPhone = NormalizePhone(phoneNumber);
 
+            // Build form fields (omit empty vars)
+            var form = new List<KeyValuePair<string, string>>
+    {
+        new KeyValuePair<string, string>("From", senderId ?? "YOBHAS"),
+        new KeyValuePair<string, string>("To", normalizedPhone),
+        new KeyValuePair<string, string>("TemplateName", templateName)
+    };
+            if (!string.IsNullOrWhiteSpace(var1)) form.Add(new KeyValuePair<string, string>("VAR1", var1!));
+            if (!string.IsNullOrWhiteSpace(var2)) form.Add(new KeyValuePair<string, string>("VAR2", var2!));
+
             var url = $"https://2factor.in/API/V1/{apiKey}/ADDON_SERVICES/SEND/TSMS";
 
-            var payload = new
-            {
-                From = senderId ?? "YOBHAS",
-                To = normalizedPhone,
-                TemplateName = templateName,
-                VAR1 = var1 ?? string.Empty,
-                VAR2 = var2 ?? string.Empty
-            };
-
-            var json = JsonConvert.SerializeObject(payload);
-
-            // masked log to confirm apiKey presence
-            string Mask(string s, int showRight = 4)
+            // Mask API key in logs
+            string MaskKey(string s, int showRight = 4)
             {
                 if (string.IsNullOrEmpty(s)) return string.Empty;
                 if (s.Length <= showRight) return new string('*', s.Length);
                 return new string('*', s.Length - showRight) + s[^showRight..];
             }
 
-            _logger.LogInformation("TwoFactor.SendOtp -> sending to {to} template={template} apiKey={keyMasked}", normalizedPhone, templateName, apiKey);
-            _logger.LogDebug("TwoFactor.SendOtp payload: {payload}", json);
+            _logger.LogInformation("TwoFactor.SendOtp -> sending to {to} template={template} apiKey={keyMasked}",
+                normalizedPhone, templateName, MaskKey(apiKey));
 
-            var resp = await _http.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
+            var requestContent = new FormUrlEncodedContent(form);
+
+            // Provide accept header for explicitness
+            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = requestContent
+            };
+            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+            var resp = await _http.SendAsync(request);
             var body = await resp.Content.ReadAsStringAsync();
 
             _logger.LogInformation("TwoFactor response HTTP {code} bodyLength={len}", (int)resp.StatusCode, body?.Length ?? 0);
             _logger.LogDebug("TwoFactor response body: {body}", body);
 
-            var result = new ProviderResult { RawResponse = body };
+            var result = new ProviderResult { RawResponse = body ?? string.Empty };
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -84,18 +93,30 @@ namespace ShoppingPlatform.Sms
 
             try
             {
-                dynamic parsed = JsonConvert.DeserializeObject(body);
-                string status = parsed?.Status ?? string.Empty;
-                string details = parsed?.Details ?? string.Empty;
+                // typical 2Factor shape: { "Status":"Success","Details":"<sessionId>" }
+                var parsed = JsonConvert.DeserializeObject<JObject?>(body ?? "{}");
+                var status = parsed?["Status"]?.ToString() ?? parsed?["status"]?.ToString() ?? string.Empty;
+                var details = parsed?["Details"]?.ToString() ?? parsed?["details"]?.ToString() ?? string.Empty;
 
-                result.ProviderStatus = status ?? string.Empty;
-                result.SessionId = details ?? string.Empty;
-                // some providers include message id in another field; parse if present
-                result.ProviderMessageId = parsed?.MessageId ?? parsed?.message_id ?? string.Empty;
+                result.ProviderStatus = status;
+                result.SessionId = details;
 
+                // message id may be in a different field
+                result.ProviderMessageId = parsed?["MessageId"]?.ToString()
+                                           ?? parsed?["message_id"]?.ToString()
+                                           ?? parsed?["messageId"]?.ToString()
+                                           ?? string.Empty;
+
+                // treat explicit "Success" or "Accepted" as success; do NOT treat presence of details alone as success
                 result.IsSuccess = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
-                                   || string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase)
-                                   || !string.IsNullOrWhiteSpace(details); // fallback
+                                   || string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase);
+
+                // fallback: some providers return blank status but give a details sessionId
+                if (!result.IsSuccess && !string.IsNullOrWhiteSpace(details))
+                {
+                    // keep it false but record raw response for manual inspection
+                    _logger.LogWarning("TwoFactor: unexpected success fallback - status='{status}' details='{details}'", status, details);
+                }
 
                 return result;
             }
@@ -107,6 +128,7 @@ namespace ShoppingPlatform.Sms
                 return result;
             }
         }
+
 
         // Verify OTP
         public async Task<bool> VerifyOtpAsync(string apiKey, string sessionId, string otp)
