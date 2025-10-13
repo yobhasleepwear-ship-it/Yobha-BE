@@ -37,5 +37,11 @@ namespace ShoppingPlatform.Repositories
             var result = await _col.UpdateOneAsync(o => o.Id == id, update);
             return result.ModifiedCount > 0;
         }
+        public async Task<bool> UpdateAsync(string id, Order order)
+        {
+            order.UpdatedAt = DateTime.UtcNow;
+            var result = await _col.ReplaceOneAsync(o => o.Id == id, order);
+            return result.ModifiedCount > 0;
+        }
     }
 }

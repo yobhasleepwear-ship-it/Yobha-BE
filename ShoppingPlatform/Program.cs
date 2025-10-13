@@ -117,7 +117,11 @@ builder.Services.AddSingleton<IWishlistRepository, WishlistRepository>();
 builder.Services.AddSingleton<ICartRepository, CartRepository>();
 builder.Services.AddSingleton<IOrderRepository, OrderRepository>();
 builder.Services.AddSingleton<IStorageService, S3StorageService>();
-
+builder.Services.AddScoped<ICouponRepository, CouponRepository>();
+builder.Services.AddScoped<ICouponService, CouponService>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
+builder.Services.AddScoped<IOrderRepository, OrderRepository>(); // you already have this probably
+builder.Services.AddHttpClient<IRazorpayService, RazorpayService>();
 // ---------------------------
 // AWS S3
 // ---------------------------

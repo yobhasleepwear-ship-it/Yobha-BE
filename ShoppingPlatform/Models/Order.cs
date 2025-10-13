@@ -67,6 +67,14 @@ namespace ShoppingPlatform.Models
         public DateTime? CouponAppliedAt { get; set; }     // when coupon was applied to this order
         public bool CouponUsageRecorded { get; set; } = false; // set true after payment success & MarkUsed called
 
+        // Payment metadata
+        public string PaymentMethod { get; set; } = "COD"; // "COD" or "razorpay"
+        public string PaymentStatus { get; set; } = "Pending"; // Pending, Confirmed, Paid, Failed
+        public string? RazorpayOrderId { get; set; }
+        public string? RazorpayPaymentId { get; set; }
+        public string? PaymentGatewayResponse { get; set; } // optional raw response
+
+
         public string Status { get; set; } = "Pending";
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

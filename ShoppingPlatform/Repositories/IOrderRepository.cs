@@ -10,5 +10,7 @@ namespace ShoppingPlatform.Repositories
         Task<Order?> GetByIdAsync(string id);
         Task<Order> CreateAsync(Order order);
         Task<bool> UpdateStatusAsync(string id, string status);
+        Task<bool> UpdateAsync(string id, Order order); // new
+
     }
 }
