@@ -650,6 +650,129 @@ namespace ShoppingPlatform.Controllers
             };
             Response.Cookies.Append("refreshToken", token, cookieOptions);
         }
+
+        // -----------------------
+        // Addresses: list/add/update/delete (protected) - typed ApiResponse<T>
+        // -----------------------
+        [HttpGet("addresses")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<List<Address>>>> GetAddresses()
+        {
+            var uid = User.FindFirst("uid")?.Value;
+            if (uid is null)
+                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+            var addresses = await _users.GetAddressesAsync(uid);
+            return Ok(ApiResponse<List<Address>>.Ok(addresses));
+        }
+
+        /// <summary>
+        /// Add address. If IsDefault==true, repository clears previous default.
+        /// Returns the user's addresses after add.
+        /// </summary>
+        [HttpPost("addresses")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<List<Address>>>> AddAddress([FromBody] CreateAddressDto dto)
+        {
+            var uid = User.FindFirst("uid")?.Value;
+            if (uid is null)
+                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+            if (dto == null)
+                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, HttpStatusCode.BadRequest));
+
+            var address = new Address
+            {
+                Id = string.IsNullOrEmpty(dto.Id) ? null : dto.Id, // repo will generate id if null
+                FullName = dto.FullName,
+                Line1 = dto.Line1,
+                Line2 = dto.Line2,
+                City = dto.City,
+                State = dto.State,
+                Zip = dto.Zip,
+                Country = dto.Country,
+                IsDefault = dto.IsDefault
+            };
+
+            await _users.AddAddressAsync(uid, address);
+
+            var addresses = await _users.GetAddressesAsync(uid);
+            return Created("", ApiResponse<List<Address>>.Created(addresses, "Address added"));
+        }
+
+        /// <summary>
+        /// Update an existing address by id. If IsDefault==true, repository clears previous default.
+        /// Returns the user's addresses after update.
+        /// </summary>
+        [HttpPut("addresses/{addressId}")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<List<Address>>>> UpdateAddress(string addressId, [FromBody] UpdateAddressDto dto)
+        {
+            var uid = User.FindFirst("uid")?.Value;
+            if (uid is null)
+                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+            if (dto == null)
+                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, HttpStatusCode.BadRequest));
+
+            var address = new Address
+            {
+                Id = addressId,
+                FullName = dto.FullName,
+                Line1 = dto.Line1,
+                Line2 = dto.Line2,
+                City = dto.City,
+                State = dto.State,
+                Zip = dto.Zip,
+                Country = dto.Country,
+                IsDefault = dto.IsDefault
+            };
+
+            var ok = await _users.UpdateAddressAsync(uid, address);
+            if (!ok) return NotFound(ApiResponse<List<Address>>.Fail("Address not found", null, HttpStatusCode.NotFound));
+
+            var addresses = await _users.GetAddressesAsync(uid);
+            return Ok(ApiResponse<List<Address>>.Ok(addresses, "Address updated"));
+        }
+
+        /// <summary>
+        /// Delete an address. Returns user's addresses after deletion.
+        /// </summary>
+        [HttpDelete("addresses/{addressId}")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<List<Address>>>> DeleteAddress(string addressId)
+        {
+            var uid = User.FindFirst("uid")?.Value;
+            if (uid is null)
+                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+            var ok = await _users.RemoveAddressAsync(uid, addressId);
+            if (!ok) return NotFound(ApiResponse<List<Address>>.Fail("Address not found", null, HttpStatusCode.NotFound));
+
+            var addresses = await _users.GetAddressesAsync(uid);
+            return Ok(ApiResponse<List<Address>>.Ok(addresses, "Address removed"));
+        }
+
+        // -----------------------
+        // Update user full name (small profile edit) - typed ApiResponse<T>
+        // -----------------------
+        [HttpPatch("name")]
+        [Authorize]
+        public async Task<ActionResult<ApiResponse<User>>> UpdateName([FromBody] UpdateNameDto dto)
+        {
+            var uid = User.FindFirst("uid")?.Value;
+            if (uid is null)
+                return Unauthorized(ApiResponse<User>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+            if (dto == null || string.IsNullOrWhiteSpace(dto.FullName))
+                return BadRequest(ApiResponse<User>.Fail("fullName is required", null, HttpStatusCode.BadRequest));
+
+            var ok = await _users.UpdateUserNameAsync(uid, dto.FullName.Trim());
+            if (!ok) return NotFound(ApiResponse<User>.Fail("User not found", null, HttpStatusCode.NotFound));
+
+            var user = await _users.GetByIdAsync(uid);
+            return Ok(ApiResponse<User>.Ok(user!, "Name updated"));
+        }
     }
 
     // -----------------------
