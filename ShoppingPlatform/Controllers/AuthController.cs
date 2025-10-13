@@ -708,13 +708,15 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<List<Address>>>> UpdateAddress(string addressId, [FromBody] UpdateAddressDto dto)
         {
-            var uid = User.FindFirst("uid")?.Value;
+            // Accept both "uid" and "sub" claims from JWT (fallback)
+            var uid = User.FindFirst("uid")?.Value ?? User.FindFirst("sub")?.Value;
             if (uid is null)
-                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
+                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized - user id claim not found", null, System.Net.HttpStatusCode.Unauthorized));
 
             if (dto == null)
-                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, HttpStatusCode.BadRequest));
+                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, System.Net.HttpStatusCode.BadRequest));
 
+            // Build the Address model to update
             var address = new Address
             {
                 Id = addressId,
@@ -728,8 +730,9 @@ namespace ShoppingPlatform.Controllers
                 IsDefault = dto.IsDefault
             };
 
-            var ok = await _users.UpdateAddressAsync(uid, address);
-            if (!ok) return NotFound(ApiResponse<List<Address>>.Fail("Address not found", null, HttpStatusCode.NotFound));
+            var updated = await _users.UpdateAddressAsync(uid, address);
+            if (!updated)
+                return NotFound(ApiResponse<List<Address>>.Fail("Address not found or not owned by user", null, System.Net.HttpStatusCode.NotFound));
 
             var addresses = await _users.GetAddressesAsync(uid);
             return Ok(ApiResponse<List<Address>>.Ok(addresses, "Address updated"));

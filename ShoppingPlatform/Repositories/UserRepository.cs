@@ -125,7 +125,7 @@ namespace ShoppingPlatform.Repositories
             if (updatedAddress == null) throw new ArgumentNullException(nameof(updatedAddress));
             if (string.IsNullOrEmpty(updatedAddress.Id)) throw new ArgumentException("address.Id is required");
 
-            // If marking as default, unset other defaults first
+            // If marking as default, unset other defaults first (best-effort)
             if (updatedAddress.IsDefault)
             {
                 var unsetDefaults = Builders<User>.Update.Set("Addresses.$[].IsDefault", false);
@@ -135,16 +135,36 @@ namespace ShoppingPlatform.Repositories
                 );
             }
 
-            // Use positional $ to replace the matched embedded document
-            var filter = Builders<User>.Filter.And(
-                Builders<User>.Filter.Eq(u => u.Id, userId),
-                Builders<User>.Filter.Eq("Addresses._id", updatedAddress.Id)
-            );
+            // Build a filter that matches the user AND the embedded address.
+            // Try matching by ObjectId first (Addresses._id stored as ObjectId in many setups),
+            // otherwise fall back to string match. This covers both representation styles.
+            FilterDefinition<User> filter;
 
+            if (MongoDB.Bson.ObjectId.TryParse(updatedAddress.Id, out var addressObjectId))
+            {
+                // match embedded _id as an ObjectId
+                filter = Builders<User>.Filter.And(
+                    Builders<User>.Filter.Eq(u => u.Id, userId),
+                    Builders<User>.Filter.Eq("Addresses._id", addressObjectId)
+                );
+            }
+            else
+            {
+                // match embedded _id as raw string
+                filter = Builders<User>.Filter.And(
+                    Builders<User>.Filter.Eq(u => u.Id, userId),
+                    Builders<User>.Filter.Eq("Addresses._id", updatedAddress.Id)
+                );
+            }
+
+            // Replace the matched embedded address document using the positional $ operator.
             var update = Builders<User>.Update.Set("Addresses.$", updatedAddress);
+
             var result = await _collection.UpdateOneAsync(filter, update);
             return result.ModifiedCount > 0;
         }
+
+
 
         /// <summary>
         /// Remove an address by id. Returns true if removed.
