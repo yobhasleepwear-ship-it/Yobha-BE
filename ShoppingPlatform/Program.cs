@@ -32,31 +32,51 @@ var allowedOrigins = configuration.GetSection("AllowedCorsOrigins").Get<string[]
                          "https://yobha-test-env.vercel.app",
                          "http://localhost:5173",
                          "http://localhost:3000",
+                         "https://yobha-test-env-aef5.vercel.app/home"
                      };
 
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowWeb", policy =>
     {
-        policy.WithOrigins(allowedOrigins)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+        policy
+            .SetIsOriginAllowed(origin =>
+            {
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+
+                // Allow your production site(s)
+                if (uri.Host.Equals("www.yobha.in", StringComparison.OrdinalIgnoreCase)) return true;
+
+                // Allow your specific test env
+                if (uri.Host.Equals("yobha-test-env.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
+
+                // Allow Vercel preview branches for this project only
+                // e.g., yobha-test-env-git-<branch>-<hash>.vercel.app
+                if (uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase) &&
+                    uri.Host.Contains("yobha-test-env", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                // Allow localhost for dev
+                if (uri.IsLoopback) return true;
+
+                return false;
+            })
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 
     options.AddPolicy("AllowLocalhostLoopback", policy =>
     {
-        policy.SetIsOriginAllowed(origin =>
-        {
-            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
-                return false;
-            return uri.IsLoopback;
-        })
-        .AllowAnyHeader()
-        .AllowAnyMethod()
-        .AllowCredentials();
+        policy
+            .SetIsOriginAllowed(origin =>
+                Uri.TryCreate(origin, UriKind.Absolute, out var u) && u.IsLoopback)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
+
 
 // ---------------------------
 // MongoDB

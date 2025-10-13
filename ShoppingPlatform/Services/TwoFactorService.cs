@@ -54,7 +54,7 @@ namespace ShoppingPlatform.Sms
             if (!string.IsNullOrWhiteSpace(var1)) form.Add(new KeyValuePair<string, string>("VAR1", var1!));
             if (!string.IsNullOrWhiteSpace(var2)) form.Add(new KeyValuePair<string, string>("VAR2", var2!));
 
-            var url = $"https://2factor.in/API/V1/{apiKey}/ADDON_SERVICES/SEND/TSMS";
+            var url = $"https://2factor.in/API/V1/{apiKey}/SMS/{phoneNumber}/AUTOGEN/YOBHAS";
 
             // Mask API key in logs
             string MaskKey(string s, int showRight = 4)
