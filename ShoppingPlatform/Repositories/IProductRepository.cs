@@ -8,7 +8,7 @@ namespace ShoppingPlatform.Repositories
     public interface IProductRepository
     {
         // Query returns list of DTOs for listing and total count (for pagination)
-        Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,
+        Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category, string? subCategory,
             decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort);
 
         Task<Product?> GetByIdAsync(string id);

@@ -22,7 +22,7 @@ namespace ShoppingPlatform.Repositories
         // -----------------------
         // QueryAsync
         // -----------------------
-        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,
+        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category,string? subCategory,
             decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
         {
             var filters = new List<FilterDefinition<Product>>();
@@ -50,6 +50,13 @@ namespace ShoppingPlatform.Repositories
                     builder.Eq(p => p.ProductMainCategory, cat)
                 );
                 filters.Add(catFilter);
+            }
+
+            if (!string.IsNullOrWhiteSpace(subCategory))
+            {
+                var subCat = subCategory.Trim();
+                var subCatFilter = builder.Eq(p => p.ProductCategory, subCat);
+                filters.Add(subCatFilter);
             }
 
             var combinedFilter = filters.Count > 0 ? builder.And(filters) : builder.Empty;

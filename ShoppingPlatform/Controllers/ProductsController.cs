@@ -40,6 +40,7 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<PagedResult<ProductListItemDto>>>> Query(
             [FromQuery] string? q,
             [FromQuery] string? category,
+            [FromQuery] string? subCategory,
             [FromQuery] decimal? minPrice = null,
             [FromQuery] decimal? maxPrice = null,
             [FromQuery] int page = 1,
@@ -51,7 +52,7 @@ namespace ShoppingPlatform.Controllers
             if (page <= 0) page = 1;
             if (pageSize <= 0) pageSize = 20;
 
-            var (items, total) = await _repo.QueryAsync(q, category, minPrice, maxPrice, page, pageSize, sort);
+            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, page, pageSize, sort);
 
             var paged = new PagedResult<ProductListItemDto>
             {
