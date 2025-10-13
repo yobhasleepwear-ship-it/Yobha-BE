@@ -53,7 +53,7 @@ namespace ShoppingPlatform.Controllers
             var orderAmount = req.OrderAmount;
             var code = req.CouponCode;
 
-            var result = await _service.ValidateAndApplyAsync(code, userId, orderAmount, req.OrderId);
+            var result = await _service.ValidateOnlyAsync(code, userId, orderAmount);
 
             if (!result.IsValid)
                 return BadRequest(ApiResponse<object>.Fail(result.ErrorMessage, null, System.Net.HttpStatusCode.BadRequest));
