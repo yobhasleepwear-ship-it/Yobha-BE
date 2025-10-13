@@ -114,7 +114,8 @@ namespace ShoppingPlatform.Controllers
                 token = accessToken,
                 expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
                 refreshToken = refreshToken.Token,
-                user = new { user.Id, user.Email, user.FullName }
+                user = new { user.Id, user.Email, user.FullName },
+                role = new { roles = new[] {user.Roles} }   
             };
 
             // Return 201 (created) along with tokens — same shape as your login response
@@ -269,7 +270,8 @@ namespace ShoppingPlatform.Controllers
                 token = accessToken,
                 expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
                 refreshToken = refreshToken.Token,
-                user = new { user.Id, user.Email, user.FullName }
+                user = new { user.Id, user.Email, user.FullName },
+                role = new { roles = new[] { user.Roles } }
             };
             return Ok(ApiResponse<object>.Ok(data, "Login successful"));
         }

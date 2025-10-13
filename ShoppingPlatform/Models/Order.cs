@@ -54,11 +54,18 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal Tax { get; set; } = 0m;
 
+        // Discount applied (derived from coupon or manual discount)
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal Discount { get; set; } = 0m;
 
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal Total { get; set; }
+
+        // coupon metadata
+        public string? CouponCode { get; set; }            // e.g. "FIRST30"
+        public string? CouponId { get; set; }              // coupon document _id (if validated)
+        public DateTime? CouponAppliedAt { get; set; }     // when coupon was applied to this order
+        public bool CouponUsageRecorded { get; set; } = false; // set true after payment success & MarkUsed called
 
         public string Status { get; set; } = "Pending";
 

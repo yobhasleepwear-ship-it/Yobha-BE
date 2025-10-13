@@ -23,4 +23,13 @@ namespace ShoppingPlatform.DTOs
         public string? UpdatedBy { get; set; }          // admin user id or name
         public string? Note { get; set; }
     }
+
+    public class CreateOrderRequest
+    {
+        // Optional coupon code provided by client while creating order
+        public string? CouponCode { get; set; }
+
+        // Optionally you may include shipping method, notes etc later
+        public string? Note { get; set; }
+    }
 }
