@@ -56,9 +56,9 @@ namespace ShoppingPlatform.Controllers
 
             var paged = new PagedResult<ProductListItemDto>
             {
-                PageNumber = page,
+                Page = page,
                 PageSize = pageSize,
-                Total = total,
+                TotalCount = total,
                 Items = items
             };
 

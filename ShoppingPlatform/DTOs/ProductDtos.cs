@@ -10,6 +10,7 @@ namespace ShoppingPlatform.Dto
         public string Id { get; set; } = string.Empty;
         public string ProductId { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
         public decimal Price { get; set; }
         public string Category { get; set; } = string.Empty;
         public List<string> Images { get; set; } = new List<string>();
@@ -71,9 +72,18 @@ namespace ShoppingPlatform.Dto
 
     public class PagedResult<T>
     {
-        public int PageNumber { get; set; }
-        public int PageSize { get; set; }
-        public long Total { get; set; }
-        public List<T> Items { get; set; } = new();
+        public IEnumerable<T> Items { get; set; } = Array.Empty<T>();
+
+        // Current page number (1-based)
+        public int Page { get; set; } = 1;
+
+        // Number of items per page
+        public int PageSize { get; set; } = 10;
+
+        // Total number of matching records in DB
+        public long TotalCount { get; set; } = 0;
+
+        // Computed total pages
+        public int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling((double)TotalCount / PageSize);
     }
 }

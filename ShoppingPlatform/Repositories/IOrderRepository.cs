@@ -1,4 +1,5 @@
-﻿using ShoppingPlatform.Models;
+﻿using ShoppingPlatform.Dto;
+using ShoppingPlatform.Models;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -11,6 +12,12 @@ namespace ShoppingPlatform.Repositories
         Task<Order> CreateAsync(Order order);
         Task<bool> UpdateStatusAsync(string id, string status);
         Task<bool> UpdateAsync(string id, Order order); // new
+        Task<PagedResult<Order>> GetOrdersAdminAsync(
+            int page,
+            int pageSize,
+            string sort,
+            OrderFilter filter,
+            CancellationToken ct);
 
     }
 }

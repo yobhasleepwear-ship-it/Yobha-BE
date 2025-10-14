@@ -81,6 +81,7 @@ namespace ShoppingPlatform.Helpers
                 Id = p.Id ?? string.Empty,
                 ProductId = p.ProductId ?? string.Empty,
                 Name = string.IsNullOrWhiteSpace(p.Name) ? (p.ProductMainCategory ?? string.Empty) : p.Name,
+                Description = p.Description ?? string.Empty,
                 Price = PickListPrice(p, country),
                 Category = category ?? string.Empty,
                 Images = images,

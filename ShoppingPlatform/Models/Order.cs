@@ -80,4 +80,12 @@ namespace ShoppingPlatform.Models
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }
     }
+
+
+    public class OrderFilter
+    {
+        public string? Id { get; set; }
+        public DateTime? From { get; set; }
+        public DateTime? To { get; set; }
+    }
 }

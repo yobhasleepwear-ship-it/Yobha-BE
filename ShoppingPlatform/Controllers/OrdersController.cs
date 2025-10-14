@@ -5,6 +5,7 @@ using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShoppingPlatform.Dto;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
@@ -179,6 +180,47 @@ namespace ShoppingPlatform.Controllers
             // optionally trigger notifications if request.NotifyCustomer == true
 
             return Ok(ApiResponse<OrderStatusResponse>.Ok(responsePayload, "Status updated successfully"));
+        }
+
+
+        [HttpGet("GetAllOrdersAdmin")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> GetAllOrdersAdmin(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string? sort = "createdAt_desc",
+        [FromQuery] string? Id = null,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        CancellationToken ct = default)
+        {
+            var filter = new OrderFilter
+            {
+                Id = Id,
+                From = from,
+                To = to
+            };
+
+            var pagedResult = await _orderRepo.GetOrdersAdminAsync(page, pageSize, sort, filter, ct);
+
+            var pagination = new PaginationResponse
+            {
+                PageNumber = pagedResult.Page,
+                PageSize = pagedResult.PageSize,
+                TotalRecords = (int)pagedResult.TotalCount,
+                TotalPages = pagedResult.TotalPages
+            };
+
+            var response = new ApiResponse<List<Order>>
+            {
+                Success = true,
+                Status = HttpStatusCode.OK,
+                Message = "Orders fetched successfully",
+                Data = pagedResult.Items.ToList(),
+                Pagination = pagination
+            };
+
+            return Ok(response);
         }
     }
 }
