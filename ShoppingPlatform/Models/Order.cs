@@ -60,6 +60,9 @@ namespace ShoppingPlatform.Models
 
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal Total { get; set; }
+        public string Currency { get; set; }
+
+        public Address ShippingAddress { get; set; }
 
         // coupon metadata
         public string? CouponCode { get; set; }            // e.g. "FIRST30"

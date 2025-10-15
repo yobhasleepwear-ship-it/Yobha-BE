@@ -38,5 +38,9 @@ namespace ShoppingPlatform.Repositories
         Task<IEnumerable<Review>> GetPendingReviewsAsync(int page = 1, int pageSize = 50);
         Task<bool> ApproveReviewAsync(string productId, string reviewId);
         Task<bool> RejectReviewAsync(string productId, string reviewId);
+        Task<bool> DecrementStockAsync(string productObjectId, int quantity);
+        // returns true if the stock was decremented (atomic check stock >= qty and update), false otherwise
+        Task IncrementStockAsync(string productObjectId, int quantity);
+        // used for rollback; throws on failure
     }
 }

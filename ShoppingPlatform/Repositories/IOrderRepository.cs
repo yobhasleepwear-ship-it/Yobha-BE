@@ -18,6 +18,7 @@ namespace ShoppingPlatform.Repositories
             string sort,
             OrderFilter filter,
             CancellationToken ct);
+        Task<bool> DeleteAsync(string id);
 
     }
 }

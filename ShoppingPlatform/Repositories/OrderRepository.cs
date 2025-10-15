@@ -95,5 +95,15 @@ namespace ShoppingPlatform.Repositories
             };
         }
 
+        public async Task<bool> DeleteAsync(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+                return false;
+
+            var filter = Builders<Order>.Filter.Eq(o => o.Id, id);
+            var result = await _col.DeleteOneAsync(filter);
+            return result.DeletedCount == 1;
+        }
+
     }
 }

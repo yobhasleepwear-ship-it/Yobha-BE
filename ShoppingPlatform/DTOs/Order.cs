@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using ShoppingPlatform.Models;
+using System.ComponentModel.DataAnnotations;
 
 namespace ShoppingPlatform.DTOs
 {
@@ -26,10 +27,9 @@ namespace ShoppingPlatform.DTOs
 
     public class CreateOrderRequest
     {
-        // Optional coupon code provided by client while creating order
+        public Address ShippingAddress { get; set; }
+        public string PaymentMethod { get; set; } // "COD" or "razorpay"
         public string? CouponCode { get; set; }
-
-        // Optionally you may include shipping method, notes etc later
-        public string? Note { get; set; }
     }
+
 }
