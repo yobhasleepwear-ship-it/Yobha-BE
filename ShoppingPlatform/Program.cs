@@ -25,18 +25,13 @@ var configuration = builder.Configuration;
 // ---------------------------
 // CORS
 // ---------------------------
-var allowedOrigins = configuration.GetSection("AllowedCorsOrigins").Get<string[]>()
-                     ?? new[]
-                     {
-                         "https://www.yobha.in",
-                         "https://yobha-test-env.vercel.app",
-                         "http://localhost:5173",
-                         "http://localhost:3000",
-                         "https://yobha-test-env-aef5.vercel.app/home"
-                     };
+// Read allowed origins array from configuration if present.
+var allowedOriginsFromConfig = configuration.GetSection("AllowedCorsOrigins").Get<string[]>();
 
 builder.Services.AddCors(options =>
 {
+    // A flexible policy that allows specific origins we expect (production, test, cloudfront, localhost),
+    // while keeping some wildcard-like acceptance for vercel preview hosts that match a pattern.
     options.AddPolicy("AllowWeb", policy =>
     {
         policy
@@ -44,28 +39,49 @@ builder.Services.AddCors(options =>
             {
                 if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
 
-                // Allow your production site(s)
+                // Explicit production host
                 if (uri.Host.Equals("www.yobha.in", StringComparison.OrdinalIgnoreCase)) return true;
 
-                // Allow your specific test env
+                // Known test hosts
                 if (uri.Host.Equals("yobha-test-env.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
+                if (uri.Host.Equals("yobha-test-env-aef5.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
 
-                // Allow Vercel preview branches for this project only
-                // e.g., yobha-test-env-git-<branch>-<hash>.vercel.app
+                // Allow Vercel preview branches for this project only, e.g., yobha-test-env-git-<branch>-<hash>.vercel.app
                 if (uri.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase) &&
                     uri.Host.Contains("yobha-test-env", StringComparison.OrdinalIgnoreCase))
                     return true;
 
+                // CloudFront distribution used for your static site
+                if (uri.Host.Equals("d2ze1yjiprz2jo.cloudfront.net", StringComparison.OrdinalIgnoreCase)) return true;
+
                 // Allow localhost for dev
                 if (uri.IsLoopback) return true;
 
+                // Also allow anything explicitly provided in appsettings AllowedCorsOrigins
+                if (allowedOriginsFromConfig != null)
+                {
+                    foreach (var allowed in allowedOriginsFromConfig)
+                    {
+                        if (string.IsNullOrWhiteSpace(allowed)) continue;
+                        // Normalize the allowed origin into a Uri and compare host+scheme
+                        if (Uri.TryCreate(allowed, UriKind.Absolute, out var allowedUri))
+                        {
+                            if (uri.Scheme.Equals(allowedUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
+                                uri.Host.Equals(allowedUri.Host, StringComparison.OrdinalIgnoreCase))
+                                return true;
+                        }
+                    }
+                }
+
                 return false;
             })
+            // API endpoints commonly require these
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
     });
 
+    // A developer-only policy that allows only loopback origins (useful when running APIs locally)
     options.AddPolicy("AllowLocalhostLoopback", policy =>
     {
         policy
@@ -76,7 +92,6 @@ builder.Services.AddCors(options =>
             .AllowCredentials();
     });
 });
-
 
 // ---------------------------
 // MongoDB
@@ -100,28 +115,29 @@ if (string.IsNullOrWhiteSpace(jwtSettings.Key) ||
     string.IsNullOrWhiteSpace(jwtSettings.Audience))
 {
     cfgLogger.LogWarning("JWT settings appear incomplete. Ensure Jwt:Key, Jwt:Issuer, Jwt:Audience are set in configuration.");
-    // Optionally throw to fail-fast in environments where JWT must be configured:
+    // Optionally throw to fail-fast in CI/Prod:
     // throw new InvalidOperationException("JWT is not configured properly.");
 }
 
 // ---------------------------
 // Repositories & Services
 // ---------------------------
-// Prefer registering interfaces for testability when available.
-// Note: Mongo-backed repositories are safe as singletons with IMongoDatabase.
+// Register repositories & services. Prefer interfaces where available.
 builder.Services.AddSingleton<UserRepository>();
 builder.Services.AddSingleton<IProductRepository, ProductRepository>();
 builder.Services.AddSingleton<OtpRepository>();
 builder.Services.AddSingleton<InviteRepository>();
 builder.Services.AddSingleton<IWishlistRepository, WishlistRepository>();
 builder.Services.AddSingleton<ICartRepository, CartRepository>();
-builder.Services.AddSingleton<IOrderRepository, OrderRepository>();
+// Use scoped for repositories that may depend on scoped things; adjust as you need
+builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddSingleton<IStorageService, S3StorageService>();
 builder.Services.AddScoped<ICouponRepository, CouponRepository>();
 builder.Services.AddScoped<ICouponService, CouponService>();
-builder.Services.AddScoped<IOrderRepository, OrderRepository>();
-builder.Services.AddScoped<IOrderRepository, OrderRepository>(); // you already have this probably
+
+// Avoid duplicate registrations; add HttpClient for Razorpay
 builder.Services.AddHttpClient<IRazorpayService, RazorpayService>();
+
 // ---------------------------
 // AWS S3
 // ---------------------------
@@ -130,9 +146,13 @@ var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
 {
     var region = Amazon.RegionEndpoint.GetBySystemName(awsSettings.Region);
-    var creds = new Amazon.Runtime.BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
-    builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(creds, region));
+    if (!string.IsNullOrEmpty(awsSettings.AccessKey) && !string.IsNullOrEmpty(awsSettings.SecretKey))
+    {
+        var creds = new Amazon.Runtime.BasicAWSCredentials(awsSettings.AccessKey, awsSettings.SecretKey);
+        builder.Services.AddSingleton<IAmazonS3>(sp => new AmazonS3Client(creds, region));
+    }
 }
+
 // Make IS3Service singleton to match IAmazonS3 (stateless)
 builder.Services.AddSingleton<IS3Service, S3Service>();
 
@@ -144,8 +164,6 @@ builder.Services.AddHttpClient<TwoFactorService>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(15);
 });
-
-// Add the TwoFactorSmsSender that accepts IConfiguration and ILogger
 builder.Services.AddSingleton<ISmsSender, TwoFactorSmsSender>();
 
 // Optional: Log presence of TwoFactor key at startup (non-secret)
@@ -249,6 +267,7 @@ catch (Exception ex)
     startupLogger.LogWarning(ex, "Failed to create unique index on products.productId. Ensure migration run to remove duplicates before enabling unique index.");
 }
 
+// Use the appropriate CORS policy depending on environment
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -260,9 +279,11 @@ else
     app.UseCors("AllowWeb");
 }
 
+// IMPORTANT: Ensure CORS middleware runs BEFORE authentication if preflight needs to include auth headers.
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseMiddleware<JwtMiddleware>();
 app.UseAuthorization();
+
 app.MapControllers();
 app.Run();
