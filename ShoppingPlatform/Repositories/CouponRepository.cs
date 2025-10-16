@@ -33,16 +33,73 @@ namespace ShoppingPlatform.Repositories
             return await _coupons.Find(c => c.Code == normalized).FirstOrDefaultAsync();
         }
 
+        public async Task<Coupon?> GetByIdAsync(string couponId)
+        {
+            if (string.IsNullOrWhiteSpace(couponId)) return null;
+            return await _coupons.Find(c => c.Id == couponId).FirstOrDefaultAsync();
+        }
+
         public Task CreateAsync(Coupon coupon) =>
             _coupons.InsertOneAsync(coupon);
 
-        public async Task<bool> IncrementUsageCountAsync(string couponId)
+        /// <summary>
+        /// Atomically claim a coupon for a user:
+        /// - ensures UsedCount < GlobalUsageLimit (if set)
+        /// - ensures user is not already in UsedByUserIds (for PerUserUsageLimit == 1)
+        /// The update increments UsedCount and AddToSet the userId.
+        /// Returns the updated coupon or null if claim failed.
+        /// </summary>
+        public async Task<Coupon?> TryClaimCouponAsync(string couponCode, string userId)
         {
-            var res = await _coupons.UpdateOneAsync(
-                Builders<Coupon>.Filter.Eq(c => c.Id, couponId),
-                Builders<Coupon>.Update.Inc(c => c.UsedCount, 1)
-            );
-            return res.ModifiedCount > 0;
+            if (string.IsNullOrWhiteSpace(couponCode) || string.IsNullOrWhiteSpace(userId))
+                return null;
+
+            var normalized = couponCode.Trim().ToUpperInvariant();
+
+            // fetch coupon once to determine limits (light read)
+            var coupon = await GetByCodeAsync(normalized);
+            if (coupon == null || !coupon.IsActive) return null;
+
+            var filter = Builders<Coupon>.Filter.Eq(c => c.Id, coupon.Id);
+
+            // ensure global usage limit still available if set
+            if (coupon.GlobalUsageLimit.HasValue)
+            {
+                filter = filter & Builders<Coupon>.Filter.Lt(c => c.UsedCount, coupon.GlobalUsageLimit.Value);
+            }
+
+            // ensure user hasn't used it already when per-user limit == 1
+            if (coupon.PerUserUsageLimit.HasValue && coupon.PerUserUsageLimit.Value == 1)
+            {
+                // Ensure the UsedByUserIds array does NOT contain this userId
+                filter = filter & Builders<Coupon>.Filter.Not(Builders<Coupon>.Filter.AnyEq(c => c.UsedByUserIds, userId));
+            }
+
+            // Note: If PerUserUsageLimit > 1, repository currently does not enforce counts per-user;
+            // that requires a per-user counter map or separate collection. For welcome/per-user-one this is fine.
+
+            var update = Builders<Coupon>.Update
+                .Inc(c => c.UsedCount, 1)
+                .AddToSet(c => c.UsedByUserIds, userId);
+
+            var options = new FindOneAndUpdateOptions<Coupon>
+            {
+                ReturnDocument = ReturnDocument.After
+            };
+
+            var updated = await _coupons.FindOneAndUpdateAsync(filter, update, options);
+            return updated; // null if filter didn't match (limit reached / user already used)
+        }
+
+        public async Task UndoClaimAsync(string couponId, string userId)
+        {
+            if (string.IsNullOrWhiteSpace(couponId) || string.IsNullOrWhiteSpace(userId)) return;
+
+            var update = Builders<Coupon>.Update
+                .Inc(c => c.UsedCount, -1)
+                .Pull(c => c.UsedByUserIds, userId);
+
+            await _coupons.UpdateOneAsync(c => c.Id == couponId, update);
         }
 
         public async Task AddUsageAsync(CouponUsage usage) =>
@@ -50,6 +107,13 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> HasUserUsedAsync(string couponId, string userId)
         {
+            if (string.IsNullOrWhiteSpace(couponId) || string.IsNullOrWhiteSpace(userId)) return false;
+
+            // Check both coupon document's UsedByUserIds and the usages audit collection for redundancy
+            var coupon = await GetByIdAsync(couponId);
+            if (coupon != null && coupon.UsedByUserIds != null && coupon.UsedByUserIds.Contains(userId))
+                return true;
+
             var filter = Builders<CouponUsage>.Filter.And(
                 Builders<CouponUsage>.Filter.Eq(u => u.CouponId, couponId),
                 Builders<CouponUsage>.Filter.Eq(u => u.UserId, userId)
@@ -74,5 +138,41 @@ namespace ShoppingPlatform.Repositories
             );
             return await _coupons.Find(filter).ToListAsync();
         }
+
+        public async Task<Coupon?> MarkUsedByIdAsync(string couponId, string userId)
+        {
+            if (string.IsNullOrWhiteSpace(couponId) || string.IsNullOrWhiteSpace(userId))
+                return null;
+
+            // Fetch coupon to inspect limits (light read)
+            var coupon = await GetByIdAsync(couponId);
+            if (coupon == null || !coupon.IsActive) return null;
+
+            // Build filter ensuring global limit (if any) not exceeded and user hasn't used it already (for per-user=1)
+            var filter = Builders<Coupon>.Filter.Eq(c => c.Id, coupon.Id);
+
+            if (coupon.GlobalUsageLimit.HasValue)
+            {
+                filter = filter & Builders<Coupon>.Filter.Lt(c => c.UsedCount, coupon.GlobalUsageLimit.Value);
+            }
+
+            if (coupon.PerUserUsageLimit.HasValue && coupon.PerUserUsageLimit.Value == 1)
+            {
+                filter = filter & Builders<Coupon>.Filter.Not(Builders<Coupon>.Filter.AnyEq(c => c.UsedByUserIds, userId));
+            }
+
+            var update = Builders<Coupon>.Update
+                .Inc(c => c.UsedCount, 1)
+                .AddToSet(c => c.UsedByUserIds, userId);
+
+            var options = new FindOneAndUpdateOptions<Coupon>
+            {
+                ReturnDocument = ReturnDocument.After
+            };
+
+            var updated = await _coupons.FindOneAndUpdateAsync(filter, update, options);
+            return updated; // null if not matched (limit reached or already used)
+        }
+
     }
 }

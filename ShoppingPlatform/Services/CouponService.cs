@@ -2,6 +2,7 @@
 using ShoppingPlatform.Repositories;
 using System;
 using System.Threading.Tasks;
+using static ShoppingPlatform.Services.ICouponService;
 
 namespace ShoppingPlatform.Services
 {
@@ -17,11 +18,26 @@ namespace ShoppingPlatform.Services
 
     public interface ICouponService
     {
-        // Validate and compute discount but DO NOT persist usage.
-        Task<CouponResult> ValidateOnlyAsync(string code, string userId, decimal orderAmount);
+        Task<CouponValidationResult> ValidateOnlyAsync(string code, string userId, decimal orderAmount);
+        Task<ClaimResult> TryClaimAndRecordAsync(string code, string userId, string? orderId = null, decimal? discountAmount = null);
+        Task<bool> MarkUsedAsync(string couponId, string userId, string? orderId = null, decimal? discountAmount = null);
 
-        // After payment success: mark coupon used (persist usage and increment counts).
-        Task<bool> MarkUsedAsync(string couponId, string userId, string orderId);
+    }
+
+    public class CouponValidationResult
+    {
+        public bool IsValid { get; set; }
+        public string? ErrorMessage { get; set; }
+        public decimal DiscountAmount { get; set; }
+        public decimal FinalAmount { get; set; }
+        public Coupon? Coupon { get; set; }
+    }
+
+    public class ClaimResult
+    {
+        public bool Success { get; set; }
+        public string? Error { get; set; }
+        public Coupon? Coupon { get; set; }
     }
 
     public class CouponService : ICouponService
@@ -33,99 +49,126 @@ namespace ShoppingPlatform.Services
             _repo = repo;
         }
 
-        public async Task<CouponResult> ValidateOnlyAsync(string code, string userId, decimal orderAmount)
+        /// <summary>
+        /// Validate coupon without mutating DB. Returns discount amount and final amount.
+        /// </summary>
+        public async Task<CouponValidationResult> ValidateOnlyAsync(string code, string userId, decimal orderAmount)
         {
-            var res = new CouponResult { IsValid = false };
-
             if (string.IsNullOrWhiteSpace(code))
-            {
-                res.ErrorMessage = "couponCode is required";
-                return res;
-            }
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon code required" };
 
             var coupon = await _repo.GetByCodeAsync(code.Trim().ToUpperInvariant());
             if (coupon == null || !coupon.IsActive)
-            {
-                res.ErrorMessage = "Invalid coupon";
-                return res;
-            }
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon not found or inactive" };
 
             var now = DateTime.UtcNow;
-            if (coupon.StartAt.HasValue && now < coupon.StartAt.Value)
-            {
-                res.ErrorMessage = "Coupon not active yet";
-                return res;
-            }
-
-            if (coupon.EndAt.HasValue && now > coupon.EndAt.Value)
-            {
-                res.ErrorMessage = "Coupon expired";
-                return res;
-            }
-
-            if (coupon.GlobalUsageLimit.HasValue && coupon.UsedCount >= coupon.GlobalUsageLimit.Value)
-            {
-                res.ErrorMessage = "Coupon usage limit reached";
-                return res;
-            }
+            if (coupon.StartAt.HasValue && coupon.StartAt.Value > now)
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon not active yet" };
+            if (coupon.EndAt.HasValue && coupon.EndAt.Value < now)
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon expired" };
 
             if (coupon.MinOrderAmount.HasValue && orderAmount < coupon.MinOrderAmount.Value)
-            {
-                res.ErrorMessage = $"Order must be at least {coupon.MinOrderAmount.Value}";
-                return res;
-            }
+                return new CouponValidationResult { IsValid = false, ErrorMessage = $"Minimum order amount is {coupon.MinOrderAmount.Value}" };
 
-            if (coupon.FirstOrderOnly)
-            {
-                var used = await _repo.HasUserUsedAsync(coupon.Id!, userId);
-                if (used)
-                {
-                    res.ErrorMessage = "Coupon valid only on first order";
-                    return res;
-                }
-            }
+            if (coupon.GlobalUsageLimit.HasValue && coupon.UsedCount >= coupon.GlobalUsageLimit.Value)
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon has reached maximum redemptions" };
 
-            decimal discount = 0M;
+            // per-user check (best-effort, read-only)
+            var userUsed = await _repo.HasUserUsedAsync(coupon.Id!, userId);
+            if (coupon.PerUserUsageLimit.HasValue && coupon.PerUserUsageLimit.Value <= 1 && userUsed)
+                return new CouponValidationResult { IsValid = false, ErrorMessage = "Coupon already used by this user" };
+
+            // compute discount
+            decimal discount = 0m;
             if (coupon.Type == CouponType.Percentage)
             {
-                discount = Math.Round(orderAmount * (coupon.Value / 100M), 2);
-                if (coupon.MaxDiscountAmount.HasValue && discount > coupon.MaxDiscountAmount.Value)
-                    discount = coupon.MaxDiscountAmount.Value;
+                discount = Math.Round(orderAmount * coupon.Value / 100m, 2, MidpointRounding.AwayFromZero);
+                if (coupon.MaxDiscountAmount.HasValue) discount = Math.Min(discount, coupon.MaxDiscountAmount.Value);
             }
-            else
+            else // Fixed
             {
                 discount = coupon.Value;
             }
 
-            if (discount > orderAmount) discount = orderAmount;
-            var final = Math.Round(orderAmount - discount, 2);
+            discount = Math.Min(discount, orderAmount);
+            discount = Math.Max(discount, 0m);
+            decimal final = Math.Round(orderAmount - discount, 2);
 
-            res.IsValid = true;
-            res.DiscountAmount = discount;
-            res.FinalAmount = final;
-            res.Coupon = coupon;
-            return res;
+            return new CouponValidationResult
+            {
+                IsValid = true,
+                Coupon = coupon,
+                DiscountAmount = discount,
+                FinalAmount = final
+            };
         }
 
-        public async Task<bool> MarkUsedAsync(string couponId, string userId, string orderId)
+        /// <summary>
+        /// Attempts to claim coupon atomically and records an audit usage row.
+        /// If claim fails, returns Failure.
+        /// </summary>
+        public async Task<ClaimResult> TryClaimAndRecordAsync(string code, string userId, string? orderId = null, decimal? discountAmount = null)
         {
-            if (string.IsNullOrWhiteSpace(couponId) || string.IsNullOrWhiteSpace(userId)) return false;
+            if (string.IsNullOrWhiteSpace(code)) return new ClaimResult { Success = false, Error = "Coupon code required" };
 
-            // Optionally: ensure not already recorded for this order
-            var already = await _repo.HasUserUsedAsync(couponId, userId);
-            if (already)
+            var claimed = await _repo.TryClaimCouponAsync(code.Trim().ToUpperInvariant(), userId);
+            if (claimed == null)
+                return new ClaimResult { Success = false, Error = "Coupon could not be claimed (limit reached or already used)" };
+
+            // record audit usage (best-effort)
+            try
             {
-                // if already used by user (for FirstOrderOnly), return false to indicate not recorded again
+                var usage = new CouponUsage
+                {
+                    CouponId = claimed.Id!,
+                    UserId = userId,
+                    OrderId = orderId,
+                    DiscountAmount = discountAmount ?? 0m,
+                };
+
+                await _repo.AddUsageAsync(usage);
+            }
+            catch
+            {
+                // don't fail the claim if audit write fails; just log in real app
+            }
+
+            return new ClaimResult { Success = true, Coupon = claimed };
+        }
+
+        public async Task<bool> MarkUsedAsync(string couponId, string userId, string? orderId = null, decimal? discountAmount = null)
+        {
+            if (string.IsNullOrWhiteSpace(couponId) || string.IsNullOrWhiteSpace(userId))
+                return false;
+
+            // Atomically mark coupon used by id
+            var updatedCoupon = await _repo.MarkUsedByIdAsync(couponId, userId);
+            if (updatedCoupon == null)
+            {
+                // claim failed (limit reached or user already used)
                 return false;
             }
 
-            // increment coupon used count
-            var inc = await _repo.IncrementUsageCountAsync(couponId);
-            // add usage record
-            var usage = new CouponUsage { CouponId = couponId, UserId = userId, OrderId = orderId, UsedAt = DateTime.UtcNow };
-            await _repo.AddUsageAsync(usage);
+            // Record audit usage (best-effort; do not fail the main flow if audit insert fails)
+            try
+            {
+                var usage = new CouponUsage
+                {
+                    CouponId = updatedCoupon.Id!,
+                    UserId = userId,
+                    OrderId = orderId,
+                    DiscountAmount = discountAmount ?? 0m,
+                };
 
-            return inc;
+                await _repo.AddUsageAsync(usage);
+            }
+            catch
+            {
+                // log in a real app; swallow so we don't make caller fail due to audit insertion issues
+            }
+
+            return true;
         }
+
     }
 }

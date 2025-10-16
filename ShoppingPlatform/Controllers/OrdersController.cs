@@ -25,6 +25,8 @@ namespace ShoppingPlatform.Controllers
         private readonly ICouponService _couponService;
         private readonly IRazorpayService _razorpayService;
         private readonly ILogger<OrdersController> _logger;
+        private readonly UserRepository _userRepo;
+        private readonly ICouponRepository _couponRepo;
 
         public OrdersController(
             IOrderRepository orderRepo,
@@ -32,7 +34,9 @@ namespace ShoppingPlatform.Controllers
             IProductRepository productRepo,
             ICouponService couponService,
             IRazorpayService razorpayService,
-            ILogger<OrdersController> logger)
+            ILogger<OrdersController> logger,
+            UserRepository userRepo,
+            ICouponRepository couponRepo)
         {
             _orderRepo = orderRepo;
             _cartRepo = cartRepo;
@@ -40,6 +44,8 @@ namespace ShoppingPlatform.Controllers
             _couponService = couponService;
             _razorpayService = razorpayService;
             _logger = logger;
+            _userRepo = userRepo;
+            _couponRepo = couponRepo;
         }
 
         // -------------------------------------------
@@ -80,6 +86,8 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpPost]
         [Authorize]
+        [HttpPost]
+        [Authorize]
         public async Task<ActionResult<ApiResponse<object>>> Create([FromBody] CreateOrderRequest? request)
         {
             var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
@@ -106,8 +114,7 @@ namespace ShoppingPlatform.Controllers
                 if (unitPrice <= 0)
                     return BadRequest(ApiResponse<object>.Fail($"Invalid price for product {cart.ProductId}", null, HttpStatusCode.BadRequest));
 
-                // NOTE: product.Stock can be null/0. We treat null as unlimited if that's your convention.
-                if (product.Stock>0 && product.Stock < cart.Quantity)
+                if (product.Stock > 0 && product.Stock < cart.Quantity)
                     return BadRequest(ApiResponse<object>.Fail($"Insufficient stock for product {cart.ProductId}", null, HttpStatusCode.BadRequest));
 
                 decimal lineTotal = Decimal.Round(unitPrice * cart.Quantity, 2, MidpointRounding.AwayFromZero);
@@ -138,31 +145,34 @@ namespace ShoppingPlatform.Controllers
             // shipping & tax placeholders
             decimal shipping = 0m;
             decimal tax = 0m;
-            if (request?.ShippingAddress != null)
-            {
-                // shipping = await _shippingService.GetRateAsync(request.ShippingAddress, orderItems);
-                // tax = await _taxService.CalculateTaxAsync(request.ShippingAddress, orderItems, subTotal);
-            }
 
-            // coupon validation (validate-only)
-            decimal discount = 0m;
+            // Coupon validation (validate-only)
+            decimal couponDiscount = 0m;
             string? appliedCouponId = null;
             string? appliedCouponCode = null;
+            CouponValidationResult? couponPreview = null;
             if (!string.IsNullOrWhiteSpace(request?.CouponCode))
             {
-                var couponPreview = await _couponService.ValidateOnlyAsync(request.CouponCode!.Trim(), userId, subTotal);
+                couponPreview = await _couponService.ValidateOnlyAsync(request.CouponCode!.Trim(), userId, subTotal);
                 if (!couponPreview.IsValid)
                     return BadRequest(ApiResponse<object>.Fail(couponPreview.ErrorMessage, null, HttpStatusCode.BadRequest));
 
-                discount = Decimal.Round(couponPreview.DiscountAmount, 2, MidpointRounding.AwayFromZero);
+                couponDiscount = Decimal.Round(couponPreview.DiscountAmount, 2, MidpointRounding.AwayFromZero);
                 appliedCouponId = couponPreview.Coupon?.Id;
                 appliedCouponCode = couponPreview.Coupon?.Code;
             }
 
+            // Loyalty discount (client signals intent by passing a non-null LoyaltyDiscountAmount).
+            // We do NOT convert points here; we will remove all user's points later and apply the requested amount.
+            decimal loyaltyDiscountAmount = request?.LoyaltyDiscountAmount ?? 0m;
+            decimal pointsToDeduct = 0;
+
+            // Compute totals (coupon + loyalty)
+            decimal discount = couponDiscount + loyaltyDiscountAmount;
             var grandTotal = Decimal.Round(subTotal + shipping + tax - discount, 2, MidpointRounding.AwayFromZero);
             if (grandTotal < 0) grandTotal = 0m;
 
-            // Build order object - PaymentMethod may be "COD" or "razorpay"
+            // Build order object (coupon + loyalty metadata)
             var order = new Order
             {
                 UserId = userId,
@@ -180,6 +190,7 @@ namespace ShoppingPlatform.Controllers
                 CouponId = appliedCouponId,
                 CouponAppliedAt = appliedCouponId != null ? DateTime.UtcNow : null,
                 CouponUsageRecorded = false,
+                LoyaltyDiscountAmount = 0m,   // set after successful loyalty removal
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = null,
                 ShippingAddress = request?.ShippingAddress
@@ -190,27 +201,14 @@ namespace ShoppingPlatform.Controllers
                 // Save initial order
                 var created = await _orderRepo.CreateAsync(order);
 
-                // ---------------------------
-                // IMPORTANT: decrement stock
-                // ---------------------------
-                // We'll try to atomically decrement each product's stock using IProductRepository.DecrementStockAsync.
-                // If any decrement fails, rollback previous decrements, delete the created order, and return error.
-
+                // Reserve / decrement stock
                 var decremented = new List<(string productObjectId, int qty)>();
                 try
                 {
                     foreach (var item in created.Items)
                     {
-                        // Attempt an atomic decrement. Repository method should check stock >= qty and update atomically.
-                        // Expected signature: Task<bool> DecrementStockAsync(string productObjectId, int quantity)
                         var ok = await _productRepo.DecrementStockAsync(item.ProductObjectId, item.Quantity);
-                        if (!ok)
-                        {
-                            // insufficient stock or concurrent update prevented decrement
-                            throw new InvalidOperationException($"Failed to reserve stock for product {item.ProductId}");
-                        }
-
-                        // track successful decrement for potential rollback
+                        if (!ok) throw new InvalidOperationException($"Failed to reserve stock for product {item.ProductId}");
                         decremented.Add((item.ProductObjectId, item.Quantity));
                     }
                 }
@@ -219,48 +217,90 @@ namespace ShoppingPlatform.Controllers
                     // rollback previous decrements
                     foreach (var d in decremented)
                     {
-                        try
-                        {
-                            // Best-effort: increment back the stock. Expected signature: Task IncrementStockAsync(...)
-                            await _productRepo.IncrementStockAsync(d.productObjectId, d.qty);
-                        }
-                        catch (Exception rollEx)
-                        {
-                            _logger.LogError(rollEx, "Failed to rollback stock for product {ProductObjectId}", d.productObjectId);
-                            // don't throw here - we continue trying to rollback others
-                        }
+                        try { await _productRepo.IncrementStockAsync(d.productObjectId, d.qty); } catch { }
                     }
 
-                    // delete the created order to avoid dangling order without stock reservation
-                    try
-                    {
-                        await _orderRepo.DeleteAsync(created.Id);
-                    }
-                    catch (Exception delEx)
-                    {
-                        _logger.LogError(delEx, "Failed to delete order {OrderId} after stock reservation failure", created.Id);
-                        // We will still return error to client — but admin may need to clean this up manually
-                    }
+                    // delete created order
+                    try { await _orderRepo.DeleteAsync(created.Id); } catch (Exception delEx) { _logger.LogError(delEx, "Failed to delete order after stock reservation failure"); }
 
                     _logger.LogWarning(decEx, "Stock reservation failed for order {OrderId}", created.Id);
                     return BadRequest(ApiResponse<object>.Fail("Failed to reserve stock for one or more items. Please try again.", null, HttpStatusCode.BadRequest));
                 }
 
-                // ---------------------------
-                // All stock decremented successfully
-                // ---------------------------
+                // Now: attempt to claim coupon (if any)
+                Coupon? claimedCoupon = null;
+                if (!string.IsNullOrWhiteSpace(appliedCouponCode))
+                {
+                    var claim = await _couponService.TryClaimAndRecordAsync(appliedCouponCode!, userId, created.Id, couponDiscount);
+                    if (!claim.Success)
+                    {
+                        // Undo stock and order
+                        foreach (var d in decremented) { try { await _productRepo.IncrementStockAsync(d.productObjectId, d.qty); } catch { } }
+                        try { await _orderRepo.DeleteAsync(created.Id); } catch { }
+                        return BadRequest(ApiResponse<object>.Fail(claim.Error ?? "Failed to claim coupon", null, HttpStatusCode.BadRequest));
+                    }
+                    claimedCoupon = claim.Coupon;
+                    // mark order as coupon usage recorded
+                    created.CouponUsageRecorded = true;
+                    await _orderRepo.UpdateAsync(created.Id, created);
+                }
 
-                // OPTIONAL: If you prefer to reserve stock for Razorpay (and only decrement on payment success),
-                // replace the DecrementStockAsync call above with a ReserveStockAsync that uses TTL and then ConfirmStockAsync on webhook.
-                // Current implementation decrements immediately for both COD and razorpay flows; ensure you restore if payment fails.
+                // Now: remove ALL user's loyalty points if client signalled by passing LoyaltyDiscountAmount
+                if (request?.LoyaltyDiscountAmount != null && request.LoyaltyDiscountAmount > 0m)
+                {
+                    // Fetch current user points
+                    var user = await _userRepo.GetByIdAsync(userId);
+                    if (user == null)
+                    {
+                        // compensation: undo coupon claim (if any), rollback stock, delete order
+                        if (claimedCoupon != null && !string.IsNullOrWhiteSpace(claimedCoupon.Id))
+                        {
+                            try { await _couponRepo.UndoClaimAsync(claimedCoupon.Id!, userId); } catch { }
+                        }
+                        foreach (var d in decremented) { try { await _productRepo.IncrementStockAsync(d.productObjectId, d.qty); } catch { } }
+                        try { await _orderRepo.DeleteAsync(created.Id); } catch { }
+                        return BadRequest(ApiResponse<object>.Fail("User not found", null, HttpStatusCode.BadRequest));
+                    }
 
-                // clear the cart (only after stock reserved)
+                    // Remove all available points (pointsToDeduct = current points)
+                    pointsToDeduct = user.LoyaltyPoints??0m;
+
+                    if (pointsToDeduct > 0)
+                    {
+                        var deducted = await _userRepo.TryDeductLoyaltyPointsAsync(userId, pointsToDeduct);
+                        if (!deducted)
+                        {
+                            // compensation: undo coupon claim (if any), rollback stock, delete order
+                            if (claimedCoupon != null && !string.IsNullOrWhiteSpace(claimedCoupon.Id))
+                            {
+                                try { await _couponRepo.UndoClaimAsync(claimedCoupon.Id!, userId); } catch { }
+                            }
+
+                            foreach (var d in decremented) { try { await _productRepo.IncrementStockAsync(d.productObjectId, d.qty); } catch { } }
+                            try { await _orderRepo.DeleteAsync(created.Id); } catch { }
+
+                            return BadRequest(ApiResponse<object>.Fail("Failed to remove loyalty points (concurrent change).", null, HttpStatusCode.BadRequest));
+                        }
+                    }
+
+                    // Apply the exact amount passed by client (no conversion)
+                    created.LoyaltyDiscountAmount = Decimal.Round(request.LoyaltyDiscountAmount.Value, 2, MidpointRounding.AwayFromZero);
+
+                    // Update order's discount/total (add loyalty discount to existing discount)
+                    created.Discount = Decimal.Round(created.Discount + (created.LoyaltyDiscountAmount??0m), 2, MidpointRounding.AwayFromZero);
+                    var subtotalWithCharges = created.SubTotal + created.Shipping + created.Tax;
+                    created.Total = Decimal.Round(Math.Max(subtotalWithCharges - created.Discount, 0m), 2, MidpointRounding.AwayFromZero);
+
+                    // Persist the order update
+                    await _orderRepo.UpdateAsync(created.Id, created);
+                }
+
+                // clear the cart (only after stock reserved and discounts applied)
                 await _cartRepo.ClearAsync(userId);
 
-                // handle payment flows (COD / razorpay)
+                // handle COD / Razorpay
                 if (order.PaymentMethod?.ToLowerInvariant() == "cod")
                 {
-                    // For COD we already decremented stock and created the order
                     var resp = ApiResponse<Order>.Created(created, "Order created; pay on delivery (COD).");
                     return CreatedAtAction(nameof(Get), new { id = created.Id }, resp);
                 }
@@ -268,8 +308,6 @@ namespace ShoppingPlatform.Controllers
                 if (order.PaymentMethod?.ToLowerInvariant() == "razorpay")
                 {
                     var rpOrderResp = await _razorpayService.CreateOrderAsync(created.Total, created.Currency ?? "INR", created.Id);
-
-                    // Save razorpay order id reference on the order model and persist
                     created.RazorpayOrderId = rpOrderResp.id;
                     await _orderRepo.UpdateAsync(created.Id, created);
 
@@ -295,7 +333,6 @@ namespace ShoppingPlatform.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to create order for user {UserId}", userId);
-
                 return StatusCode((int)HttpStatusCode.InternalServerError,
                     ApiResponse<object>.Fail("Failed to create order. Please try again.", null, HttpStatusCode.InternalServerError));
             }

@@ -64,6 +64,7 @@ namespace ShoppingPlatform.Models
 
         public Address ShippingAddress { get; set; }
 
+        public decimal? LoyaltyDiscountAmount { get; set; }
         // coupon metadata
         public string? CouponCode { get; set; }            // e.g. "FIRST30"
         public string? CouponId { get; set; }              // coupon document _id (if validated)

@@ -9,7 +9,7 @@ namespace ShoppingPlatform.Repositories
     {
         // keep the DTO-based APIs
         Task<CartResponse> GetForUserDtoAsync(string userId);
-        Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? variantSku, int quantity, string? currency = null, string? note = null);
+        Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? variantSku, int quantity, string? currency , string? note = null);
         Task<CartItemResponse> UpdateQuantityAsync(string userId, string cartItemId, int quantity);
         Task RemoveAsync(string userId, string cartItemId);
         Task ClearAsync(string userId);

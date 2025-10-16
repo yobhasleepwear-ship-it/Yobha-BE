@@ -30,6 +30,7 @@ namespace ShoppingPlatform.DTOs
         public Address ShippingAddress { get; set; }
         public string PaymentMethod { get; set; } // "COD" or "razorpay"
         public string? CouponCode { get; set; }
+        public decimal? LoyaltyDiscountAmount { get; set; }// points to amount calcualtions at frontend
     }
 
 }

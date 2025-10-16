@@ -69,9 +69,17 @@ namespace ShoppingPlatform.DTOs
 
         // Calculated fields
         public decimal LineTotal => Decimal.Round(Product.UnitPrice * Quantity, 2);
+
         public DateTime AddedAt { get; set; }
         public DateTime UpdatedAt { get; set; }
         public string? Note { get; set; }
+
+        // NEW: status and messages for the API consumer
+        public bool Success { get; set; } = true;
+        public string? Message { get; set; }
+
+        // NEW: when currency mismatch occurs, return the matching CountryPrice suggestion (if any)
+        public ShoppingPlatform.Models.CountryPrice? SuggestedCountryPrice { get; set; }
     }
 
     public class CartSummary

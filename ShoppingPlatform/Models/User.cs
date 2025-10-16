@@ -42,7 +42,7 @@ namespace ShoppingPlatform.Models
         // ===== Optional state flags =====
         public bool IsActive { get; set; } = true;
         public bool IsDeleted { get; set; } = false;
-
+        public decimal? LoyaltyPoints { get; set; }
         // -------------------------
         // Helper methods for refresh tokens
         // -------------------------

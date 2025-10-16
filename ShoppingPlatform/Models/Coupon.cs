@@ -17,7 +17,7 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.ObjectId)]
         public string? Id { get; set; }
 
-        public string Code { get; set; } = null!;         // e.g., "FIRST30", unique (uppercase)
+        public string Code { get; set; } = null!;         // e.g., "FIRST100", unique (uppercase)
         public CouponType Type { get; set; }              // Percentage or Fixed
         public decimal Value { get; set; }                // 30 for 30% or 100 for ₹100 off
 
@@ -29,11 +29,19 @@ namespace ShoppingPlatform.Models
         public DateTime? EndAt { get; set; }
 
         // Limits
-        public int? GlobalUsageLimit { get; set; }        // how many times coupon can be used overall
+        public int? GlobalUsageLimit { get; set; }        // how many times coupon can be used overall (e.g., 100)
         public int UsedCount { get; set; } = 0;
 
-        public bool FirstOrderOnly { get; set; } = false; // 30% off first order scenario
+        // Per-user control & tracking
+        /// <summary>how many times a single user can use this coupon (1 => one-time per user)</summary>
+        public int? PerUserUsageLimit { get; set; } = 1;
+
+        /// <summary>list of userIds who have used the coupon (used to prevent reuse)</summary>
+        public List<string> UsedByUserIds { get; set; } = new();
+
+        // Convenience flags
         public bool IsActive { get; set; } = true;
+        public bool FirstOrderOnly { get; set; } = false;
 
         // Optional: applicability by product/category - kept simple for now
         public List<string>? ApplicableProductIds { get; set; }

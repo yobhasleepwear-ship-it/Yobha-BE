@@ -13,6 +13,7 @@ namespace ShoppingPlatform.Models
         public string CouponId { get; set; } = null!;
         public string UserId { get; set; } = null!;
         public string? OrderId { get; set; } = null!;
+        public decimal DiscountAmount { get; set; } 
         public DateTime UsedAt { get; set; } = DateTime.UtcNow;
     }
 }

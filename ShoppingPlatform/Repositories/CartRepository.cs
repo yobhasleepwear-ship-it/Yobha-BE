@@ -20,70 +20,70 @@ namespace ShoppingPlatform.Repositories
         }
 
         // Helper: map CartItem -> CartItemResponse
-        private CartItemResponse MapToDto(CartItem item)
-        {
-            var dto = new CartItemResponse
-            {
-                Id = item.Id,
-                UserId = item.UserId,
-                Product = new CartProductSnapshot
-                {
-                    ProductId = item.Snapshot.ProductId,
-                    ProductObjectId = item.Snapshot.ProductObjectId,
-                    Name = item.Snapshot.Name,
-                    Slug = item.Snapshot.Slug,
-                    ThumbnailUrl = item.Snapshot.ThumbnailUrl,
-                    VariantSku = item.Snapshot.VariantSku,
-                    VariantId = item.Snapshot.VariantId,
-                    VariantSize = item.Snapshot.VariantSize,
-                    VariantColor = item.Snapshot.VariantColor,
-                    UnitPrice = item.Snapshot.UnitPrice,
-                    CompareAtPrice = item.Snapshot.CompareAtPrice,
-                    Currency = item.Snapshot.Currency,
-                    StockQuantity = item.Snapshot.StockQuantity,
-                    ReservedQuantity = item.Snapshot.ReservedQuantity,
-                    IsActive = item.Snapshot.IsActive,
-                    FreeShipping = item.Snapshot.FreeShipping,
-                    CashOnDelivery = item.Snapshot.CashOnDelivery,
-                    PriceList = item.Snapshot.PriceList
-                },
-                Quantity = item.Quantity,
-                AddedAt = item.AddedAt,
-                UpdatedAt = item.UpdatedAt,
-                Note = item.Note
-            };
+        //private CartItemResponse MapToDto(CartItem item)
+        //{
+        //    var dto = new CartItemResponse
+        //    {
+        //        Id = item.Id,
+        //        UserId = item.UserId,
+        //        Product = new CartProductSnapshot
+        //        {
+        //            ProductId = item.Snapshot.ProductId,
+        //            ProductObjectId = item.Snapshot.ProductObjectId,
+        //            Name = item.Snapshot.Name,
+        //            Slug = item.Snapshot.Slug,
+        //            ThumbnailUrl = item.Snapshot.ThumbnailUrl,
+        //            VariantSku = item.Snapshot.VariantSku,
+        //            VariantId = item.Snapshot.VariantId,
+        //            VariantSize = item.Snapshot.VariantSize,
+        //            VariantColor = item.Snapshot.VariantColor,
+        //            UnitPrice = item.Snapshot.UnitPrice,
+        //            CompareAtPrice = item.Snapshot.CompareAtPrice,
+        //            Currency = item.Snapshot.Currency,
+        //            StockQuantity = item.Snapshot.StockQuantity,
+        //            ReservedQuantity = item.Snapshot.ReservedQuantity,
+        //            IsActive = item.Snapshot.IsActive,
+        //            FreeShipping = item.Snapshot.FreeShipping,
+        //            CashOnDelivery = item.Snapshot.CashOnDelivery,
+        //            PriceList = item.Snapshot.PriceList
+        //        },
+        //        Quantity = item.Quantity,
+        //        AddedAt = item.AddedAt,
+        //        UpdatedAt = item.UpdatedAt,
+        //        Note = item.Note
+        //    };
 
-            return new CartItemResponse
-            {
-                Id = dto.Id,
-                UserId = dto.UserId,
-                Product = new ShoppingPlatform.DTOs.CartProductSnapshot
-                {
-                    ProductId = dto.Product.ProductId,
-                    ProductObjectId = dto.Product.ProductObjectId,
-                    Name = dto.Product.Name,
-                    Slug = dto.Product.Slug,
-                    ThumbnailUrl = dto.Product.ThumbnailUrl,
-                    VariantSku = dto.Product.VariantSku,
-                    VariantId = dto.Product.VariantId,
-                    VariantSize = dto.Product.VariantSize,
-                    VariantColor = dto.Product.VariantColor,
-                    UnitPrice = dto.Product.UnitPrice,
-                    CompareAtPrice = dto.Product.CompareAtPrice,
-                    Currency = dto.Product.Currency,
-                    StockQuantity = dto.Product.StockQuantity,
-                    ReservedQuantity = dto.Product.ReservedQuantity,
-                    IsActive = dto.Product.IsActive,
-                    FreeShipping = dto.Product.FreeShipping,
-                    CashOnDelivery = dto.Product.CashOnDelivery,
-                    PriceList = dto.Product.PriceList
-                },
-                Quantity = dto.Quantity,
-                AddedAt = dto.AddedAt,
-                UpdatedAt = dto.UpdatedAt,
-                Note = dto.Note
-            };
-        }
+        //    return new CartItemResponse
+        //    {
+        //        Id = dto.Id,
+        //        UserId = dto.UserId,
+        //        Product = new ShoppingPlatform.DTOs.CartProductSnapshot
+        //        {
+        //            ProductId = dto.Product.ProductId,
+        //            ProductObjectId = dto.Product.ProductObjectId,
+        //            Name = dto.Product.Name,
+        //            Slug = dto.Product.Slug,
+        //            ThumbnailUrl = dto.Product.ThumbnailUrl,
+        //            VariantSku = dto.Product.VariantSku,
+        //            VariantId = dto.Product.VariantId,
+        //            VariantSize = dto.Product.VariantSize,
+        //            VariantColor = dto.Product.VariantColor,
+        //            UnitPrice = dto.Product.UnitPrice,
+        //            CompareAtPrice = dto.Product.CompareAtPrice,
+        //            Currency = dto.Product.Currency,
+        //            StockQuantity = dto.Product.StockQuantity,
+        //            ReservedQuantity = dto.Product.ReservedQuantity,
+        //            IsActive = dto.Product.IsActive,
+        //            FreeShipping = dto.Product.FreeShipping,
+        //            CashOnDelivery = dto.Product.CashOnDelivery,
+        //            PriceList = dto.Product.PriceList
+        //        },
+        //        Quantity = dto.Quantity,
+        //        AddedAt = dto.AddedAt,
+        //        UpdatedAt = dto.UpdatedAt,
+        //        Note = dto.Note
+        //    };
+        //}
 
         // Get for user (DTO)
         public async Task<CartResponse> GetForUserDtoAsync(string userId)
@@ -119,7 +119,7 @@ namespace ShoppingPlatform.Repositories
         }
 
         // Add or update. Returns the saved DTO.
-        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? variantSku, int quantity, string? currency = null, string? note = null)
+        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? variantSku, int quantity, string? currency, string? note = null)
         {
             if (string.IsNullOrWhiteSpace(productId))
                 throw new ArgumentException("productId cannot be null or empty.");
@@ -137,13 +137,47 @@ namespace ShoppingPlatform.Repositories
 
             // Determine unit price
             decimal unitPrice = variant?.PriceOverride ?? product.Price;
-            string currencyToUse = currency ?? "INR";
-            // If CountryPrices exist and currency requested, try to match (simple logic)
+            string currencyToUse = string.IsNullOrWhiteSpace(currency) ? "INR" : currency!;
+
+            // If CountryPrices exist and currency requested, try to match
             if (!string.Equals(currencyToUse, "INR", StringComparison.OrdinalIgnoreCase) && product.CountryPrices?.Any() == true)
             {
                 var cp = product.CountryPrices.FirstOrDefault(c => string.Equals(c.Currency, currencyToUse, StringComparison.OrdinalIgnoreCase));
                 if (cp != null) unitPrice = cp.PriceAmount;
             }
+
+            // --- NEW: Check existing cart currency for this user ---
+            // Get any existing cart item for the user (we only need one to determine cart currency)
+            var existingCartItem = await _col
+                .Find(c => c.UserId == userId)
+                .SortBy(c => c.AddedAt)
+                .FirstOrDefaultAsync();
+
+            if (existingCartItem != null)
+            {
+                var existingCurrency = string.IsNullOrWhiteSpace(existingCartItem.Currency) ? "INR" : existingCartItem.Currency;
+
+                if (!string.Equals(existingCurrency, currencyToUse, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Try to find a CountryPrice on the product that matches the existing cart currency
+                    CountryPrice? suggested = null;
+                    if (product.CountryPrices?.Any() == true)
+                    {
+                        suggested = product.CountryPrices
+                            .FirstOrDefault(cp => string.Equals(cp.Currency, existingCurrency, StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    // Return failure response with suggestion if any
+                    return new CartItemResponse
+                    {
+                        Success = false,
+                        Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. " +
+                                  $"This product is in '{currencyToUse}'. To add this product, select the product currency matching '{existingCurrency}' or clear the cart.",
+                        SuggestedCountryPrice = suggested
+                    };
+                }
+            }
+            // --- end currency check ---
 
             // Build snapshot
             var snapshot = new CartProductSnapshot
@@ -175,10 +209,10 @@ namespace ShoppingPlatform.Repositories
                 }).ToList()
             };
 
-            // compute sku to match outside the expression tree (fixes "expression tree lambda" error)
+            // compute sku to match outside the expression tree
             var skuToMatch = variant?.Sku ?? variantSku ?? string.Empty;
 
-            // Look for existing cart item
+            // Look for existing cart item for the same product+variant
             var existing = await _col
                 .Find(c => c.UserId == userId && c.ProductId == productId && c.VariantSku == skuToMatch)
                 .FirstOrDefaultAsync();
@@ -219,6 +253,23 @@ namespace ShoppingPlatform.Repositories
                 await _col.InsertOneAsync(newItem);
                 return MapToDto(newItem);
             }
+        }
+
+        // Map CartItem (DB model) to CartItemResponse DTO
+        private CartItemResponse MapToDto(CartItem item)
+        {
+            return new CartItemResponse
+            {
+                Id = item.Id ?? string.Empty,
+                UserId = item.UserId ?? string.Empty,
+                Product = item.Snapshot ?? new CartProductSnapshot(),
+                Quantity = item.Quantity,
+                AddedAt = item.AddedAt,
+                UpdatedAt = item.UpdatedAt,
+                Note = item.Note,
+                Success = true,
+                Message = "OK"
+            };
         }
 
         public async Task<CartItemResponse> UpdateQuantityAsync(string userId, string cartItemId, int quantity)
