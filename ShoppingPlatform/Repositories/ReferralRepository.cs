@@ -99,5 +99,14 @@ namespace ShoppingPlatform.Repositories
             var res = await _referrals.UpdateOneAsync(r => r.Id == referralId && r.IsRedeemed == false, update);
             return res.ModifiedCount > 0;
         }
+
+        public async Task<List<Referral>> GetByReferrerAsync(string referrerUserId)
+        {
+            var filter = Builders<Referral>.Filter.Eq(r => r.ReferrerUserId, referrerUserId);
+            return await _referrals.Find(filter)
+                .SortByDescending(r => r.CreatedAt)
+                .ToListAsync();
+        }
+
     }
 }

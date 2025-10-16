@@ -120,5 +120,10 @@ namespace ShoppingPlatform.Services
                 session?.Dispose();
             }
         }
+        public async Task<List<Referral>> GetReferralsByReferrerAsync(string referrerUserId)
+        {
+            // implement using IReferralRepository; add repository method if missing
+            return await _refRepo.GetByReferrerAsync(referrerUserId);
+        }
     }
 }

@@ -243,7 +243,7 @@ namespace ShoppingPlatform.Controllers
                 return NotFound(notFound);
             }
 
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
 
             var review = new Review
             {

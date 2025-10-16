@@ -12,6 +12,7 @@ using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services; // for IRazorpayService and ICouponService
+using ShoppingPlatform.Helpers;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -55,7 +56,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<IEnumerable<Order>>>> GetForUser()
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             var list = await _orderRepo.GetForUserAsync(userId);
 
             var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
@@ -86,11 +87,9 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpPost]
         [Authorize]
-        [HttpPost]
-        [Authorize]
         public async Task<ActionResult<ApiResponse<object>>> Create([FromBody] CreateOrderRequest? request)
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
 
             // fetch cart
             var cartItems = await _cartRepo.GetForUserAsync(userId);

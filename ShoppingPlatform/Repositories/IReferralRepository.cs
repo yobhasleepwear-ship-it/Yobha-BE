@@ -9,5 +9,7 @@ namespace ShoppingPlatform.Repositories
         Task<Referral?> FindUnredeemedByEmailOrPhoneAsync(string email, string phone);
         Task<bool> MarkRedeemedAsync(string referralId, string referredUserId);
         Task EnsureIndexesAsync();
+        Task<List<Referral>> GetByReferrerAsync(string referrerUserId); // ✅ new
+
     }
 }

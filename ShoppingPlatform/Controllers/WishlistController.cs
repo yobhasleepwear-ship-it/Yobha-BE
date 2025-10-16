@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
+using ShoppingPlatform.Helpers;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -23,7 +24,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<IEnumerable<WishlistItemResponse>>>> Get()
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             var list = await _repo.GetForUserDtoAsync(userId);
             return Ok(ApiResponse<IEnumerable<WishlistItemResponse>>.Ok(list, "OK"));
         }
@@ -45,7 +46,7 @@ namespace ShoppingPlatform.Controllers
                 return BadRequest(ApiResponse<WishlistItemResponse>.Fail("Invalid request", errors, System.Net.HttpStatusCode.BadRequest));
             }
 
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
 
             // Repo AddAsync returns Task (no DTO). It inserts or updates snapshot.
             await _repo.AddAsync(
@@ -84,7 +85,7 @@ namespace ShoppingPlatform.Controllers
             if (string.IsNullOrWhiteSpace(productId))
                 return BadRequest(ApiResponse<object>.Fail("productId is required", new List<string> { "productId is required" }, System.Net.HttpStatusCode.BadRequest));
 
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             await _repo.RemoveAsync(userId, productId);
             return Ok(ApiResponse<object>.Ok(null, "Removed from wishlist"));
         }
@@ -97,7 +98,7 @@ namespace ShoppingPlatform.Controllers
             if (string.IsNullOrWhiteSpace(id))
                 return BadRequest(ApiResponse<object>.Fail("id is required", new List<string> { "id is required" }, System.Net.HttpStatusCode.BadRequest));
 
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             await _repo.RemoveByIdAsync(userId, id);
             return Ok(ApiResponse<object>.Ok(null, "Removed from wishlist"));
         }

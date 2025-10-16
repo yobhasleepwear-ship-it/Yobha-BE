@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
+using ShoppingPlatform.Helpers;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -22,7 +23,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<CartResponse>>> Get()
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             var dto = await _repo.GetForUserDtoAsync(userId);
             return Ok(ApiResponse<CartResponse>.Ok(dto, "OK"));
         }
@@ -31,7 +32,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<CartItemResponse>>> AddOrUpdate([FromBody] AddOrUpdateCartRequest request)
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             var item = await _repo.AddOrUpdateAsync(userId, request.ProductId, request.VariantSku, request.Quantity, request.Currency, request.Note);
             return Ok(ApiResponse<CartItemResponse>.Ok(item, "Added/Updated"));
         }
@@ -40,7 +41,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<CartItemResponse>>> UpdateQuantity([FromBody] UpdateCartQuantityRequest request)
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             var item = await _repo.UpdateQuantityAsync(userId, request.CartItemId, request.Quantity);
             return Ok(ApiResponse<CartItemResponse>.Ok(item, "Updated"));
         }
@@ -49,7 +50,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<object>>> Remove(string id)
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             await _repo.RemoveAsync(userId, id);
             return Ok(ApiResponse<object>.Ok(null, "Removed"));
         }
@@ -58,7 +59,7 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<object>>> Clear()
         {
-            var userId = User?.FindFirst("sub")?.Value ?? "anonymous";
+            var userId = User.GetUserIdOrAnonymous();
             await _repo.ClearAsync(userId);
             return Ok(ApiResponse<object>.Ok(null, "Cleared cart"));
         }
