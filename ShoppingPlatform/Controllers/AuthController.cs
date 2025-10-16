@@ -27,8 +27,8 @@ namespace ShoppingPlatform.Controllers
         private readonly InviteRepository _invites;
         private readonly GoogleSettings _googleSettings;
         private readonly IConfiguration _config;
+        private readonly ReferralService _referralService;
         private readonly ILogger<AuthController> _logger;
-
 
         public AuthController(
             UserRepository users,
@@ -38,7 +38,8 @@ namespace ShoppingPlatform.Controllers
             InviteRepository invites,
             IOptions<GoogleSettings> googleOptions,
             IConfiguration config,
-             ILogger<AuthController> logger)
+            ReferralService referralService,
+            ILogger<AuthController> logger)
         {
             _users = users;
             _otps = otps;
@@ -47,184 +48,78 @@ namespace ShoppingPlatform.Controllers
             _invites = invites;
             _googleSettings = googleOptions.Value;
             _config = config;
+            _referralService = referralService;
             _logger = logger;
         }
 
         // -----------------------
-        // Public user registration
+        // User registration (email/password)
         // -----------------------
         [HttpPost("register-user")]
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<object>>> RegisterUser([FromBody] RegisterUserDto dto)
         {
-            // normalize email & phone
             var email = dto.Email?.Trim().ToLowerInvariant();
             var phoneNormalized = PhoneHelper.Normalize(dto.PhoneNumber);
 
-            // check email uniqueness
             var existingByEmail = await _users.GetByEmailAsync(email);
-            if (existingByEmail is not null)
-            {
-                var resp = ApiResponse<string>.Fail("Email already registered", null, HttpStatusCode.Conflict);
-                return Conflict(resp);
-            }
+            if (existingByEmail != null)
+                return Conflict(ApiResponse<string>.Fail("Email already registered", null, HttpStatusCode.Conflict));
 
-            // if phone provided, check phone uniqueness
             if (!string.IsNullOrEmpty(phoneNormalized))
             {
                 var existingByPhone = await _users.GetByPhoneAsync(phoneNormalized);
-                if (existingByPhone is not null)
-                {
-                    var resp = ApiResponse<string>.Fail("Phone number already registered", null, HttpStatusCode.Conflict);
-                    return Conflict(resp);
-                }
+                if (existingByPhone != null)
+                    return Conflict(ApiResponse<string>.Fail("Phone number already registered", null, HttpStatusCode.Conflict));
             }
 
-            // create user
             var user = new User
             {
                 Email = email,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
                 Roles = new[] { "User" },
                 FullName = dto.FullName,
-                PhoneNumber = string.IsNullOrWhiteSpace(phoneNormalized) ? null : phoneNormalized,
+                PhoneNumber = phoneNormalized,
                 PhoneVerified = false,
-                CreatedAt = DateTime.UtcNow,
-            };
-
-            await _users.CreateAsync(user);
-
-            // --- auto-login: generate tokens and persist refresh token ---
-            var accessToken = _jwt.GenerateToken(user);
-
-            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
-            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
-            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
-            // add and persist refresh token to user
-            user.AddRefreshToken(refreshToken);
-            user.LastLoginAt = DateTime.UtcNow;
-            await _users.UpdateAsync(user.Id!, user);
-
-            // set cookie for web clients
-            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
-
-            var data = new
-            {
-                token = accessToken,
-                expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
-                refreshToken = refreshToken.Token,
-                user = new { user.Id, user.Email, user.FullName },
-                role = new { roles = new[] {user.Roles} }   
-            };
-
-            // Return 201 (created) along with tokens — same shape as your login response
-            var body = ApiResponse<object>.Created(data, "User created and logged in");
-            return CreatedAtAction(nameof(RegisterUser), new { id = user.Id }, body);
-        }
-
-        // -----------------------
-        // Admin registration (Admin-only)
-        // -----------------------
-        [HttpPost("register-admin")]
-        // [Authorize(Roles = "Admin")] // optionally keep it off during initial setup
-        [AllowAnonymous] // remove this once you only want Admins to create new Admins
-        public async Task<ActionResult<ApiResponse<object>>> RegisterAdmin([FromBody] RegisterAdminDto dto)
-        {
-            // Check if user already exists
-            var existing = await _users.GetByEmailAsync(dto.Email);
-            if (existing is not null)
-            {
-                if (existing.Roles?.Contains("Admin") == true)
-                {
-                    var resp = ApiResponse<string>.Fail("Email already registered as Admin.", null, HttpStatusCode.Conflict);
-                    return Conflict(resp);
-                }
-
-                var resp2 = ApiResponse<string>.Fail("Email already registered as User. Admin creation for existing User is not allowed.", null, HttpStatusCode.Conflict);
-                return Conflict(resp2);
-            }
-
-            // Create admin user
-            var user = new User
-            {
-                Email = dto.Email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
-                Roles = new[] { "Admin" },
-                FullName = dto.FullName,
                 CreatedAt = DateTime.UtcNow
             };
 
             await _users.CreateAsync(user);
 
-            // --- Auto-login: generate tokens ---
+            // Generate tokens
             var accessToken = _jwt.GenerateToken(user);
             var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
             var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
             refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
-            // Save refresh token to user
             user.AddRefreshToken(refreshToken);
             user.LastLoginAt = DateTime.UtcNow;
             await _users.UpdateAsync(user.Id!, user);
 
-            // Set cookie for refresh token
+            // Attempt referral redemption
+            try
+            {
+                var (redeemed, err) = await _referralService.RedeemReferralOnSignupAsync(user.Id!, email, phoneNormalized);
+                if (redeemed)
+                    _logger.LogInformation("Referral redeemed for new user {UserId}", user.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Referral redemption failed for new user {Email}", email);
+            }
+
             SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
 
-            // Prepare response
             var data = new
             {
                 token = accessToken,
                 expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
                 refreshToken = refreshToken.Token,
-                user = new { user.Id, user.Email, user.FullName, user.Roles }
+                user = new { user.Id, user.Email, user.FullName, LoyaltyPoints = user.LoyaltyPoints },
+                role = new { roles = new[] { user.Roles } }
             };
 
-            var body = ApiResponse<object>.Created(data, "Admin created and logged in");
-            return CreatedAtAction(nameof(RegisterAdmin), new { id = user.Id }, body);
-        }
-
-        // -----------------------
-        // Bootstrap admin - one-time creation using secret
-        // -----------------------
-        [HttpPost("bootstrap-admin")]
-        [AllowAnonymous]
-        public async Task<ActionResult<ApiResponse<object>>> BootstrapAdmin([FromBody] BootstrapAdminDto dto)
-        {
-            var configured = _config["InitialAdminSecret"];
-            if (string.IsNullOrEmpty(configured) || dto.Secret != configured)
-            {
-                var resp = ApiResponse<string>.Fail("Forbidden", null, HttpStatusCode.Forbidden);
-                // Forbid() result does not accept body easily; return status with body
-                return StatusCode((int)HttpStatusCode.Forbidden, resp);
-            }
-
-            var all = await _users.GetAllAsync();
-            if (all.Any(u => u.Roles.Contains("Admin")))
-            {
-                var resp = ApiResponse<string>.Fail("Admin already exists. Bootstrap not allowed.", null, HttpStatusCode.BadRequest);
-                return BadRequest(resp);
-            }
-
-            var existing = await _users.GetByEmailAsync(dto.Email);
-            if (existing is not null)
-            {
-                var resp = ApiResponse<string>.Fail("Email already registered.", null, HttpStatusCode.Conflict);
-                return Conflict(resp);
-            }
-
-            var user = new User
-            {
-                Email = dto.Email,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
-                Roles = new[] { "Admin" },
-                FullName = dto.FullName
-            };
-
-            await _users.CreateAsync(user);
-
-            var body = ApiResponse<object>.Created(new { user.Id, user.Email }, "Admin created");
-            return CreatedAtAction(nameof(BootstrapAdmin), new { id = user.Id }, body);
+            return CreatedAtAction(nameof(RegisterUser), new { id = user.Id },
+                ApiResponse<object>.Created(data, "User created and logged in"));
         }
 
         // -----------------------
@@ -235,34 +130,16 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<object>>> Login([FromBody] LoginDto dto)
         {
             var user = await _users.GetByEmailAsync(dto.Email);
-            if (user is null)
-            {
-                var resp = ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
+            if (user == null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
+                return Unauthorized(ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized));
 
-            var valid = BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash);
-            if (!valid)
-            {
-                var resp = ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            // generate access token (existing behavior)
             var accessToken = _jwt.GenerateToken(user);
-
-            // create refresh token and persist
             var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
             var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
-
-            // record IP for token (best-effort)
             refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
             user.AddRefreshToken(refreshToken);
             user.LastLoginAt = DateTime.UtcNow;
             await _users.UpdateAsync(user.Id!, user);
-
-            // set cookie (recommended for web clients) and also return token in body for mobile clients
             SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
 
             var data = new
@@ -270,144 +147,78 @@ namespace ShoppingPlatform.Controllers
                 token = accessToken,
                 expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60",
                 refreshToken = refreshToken.Token,
-                user = new { user.Id, user.Email, user.FullName },
+                user = new { user.Id, user.Email, user.FullName, LoyaltyPoints = user.LoyaltyPoints },
                 role = new { roles = new[] { user.Roles } }
             };
+
             return Ok(ApiResponse<object>.Ok(data, "Login successful"));
         }
 
         // -----------------------
-        // Send OTP (using 2Factor)
-        // -----------------------
-        [HttpPost("send-otp")]
-        [AllowAnonymous]
-        public async Task<ActionResult<ApiResponse<object>>> SendOtp([FromBody] SendOtpDto dto)
-        {
-            if (dto == null || string.IsNullOrWhiteSpace(dto.PhoneNumber))
-            {
-                var errors = new List<string> { "phoneNumber is required" };
-                return BadRequest(ApiResponse<object>.Fail("Invalid request", errors, System.Net.HttpStatusCode.BadRequest));
-            }
-
-            try
-            {
-                // call sms sender -> returns ProviderResult
-                var providerResult = await _sms.SendOtpAsync(dto.PhoneNumber);
-
-                // build DB OtpEntry - if your OtpEntry has no provider columns, store provider info in Note or skip
-                var entry = new OtpEntry
-                {
-                    PhoneNumber = dto.PhoneNumber,
-                    SessionId = providerResult.SessionId,
-                    CreatedAt = DateTime.UtcNow,
-                    ExpiresAt = DateTime.UtcNow.AddMinutes(5)
-                };
-
-                // if your OtpEntry supports provider fields, set them; otherwise you can store provider metadata in Note
-                // Example: if OtpEntry has ProviderStatus / ProviderMessageId / ProviderRawResponse
-                // entry.ProviderStatus = providerResult.ProviderStatus;
-                // entry.ProviderMessageId = providerResult.ProviderMessageId;
-                // entry.ProviderRawResponse = providerResult.RawResponse;
-
-                // If OtpEntry doesn't have these properties, you can use entry.Note (or similar) — adapt as needed:
-                // entry.Note = $"providerStatus={providerResult.ProviderStatus}; messageId={providerResult.ProviderMessageId}";
-
-                await _otps.CreateAsync(entry);
-
-                var data = new
-                {
-                    sessionId = providerResult.SessionId,
-                    providerStatus = providerResult.ProviderStatus,
-                    providerMessageId = providerResult.ProviderMessageId
-                };
-
-                if (!providerResult.IsSuccess)
-                {
-                    // convert provider info into error list for ApiResponse.Fail — keep simple string(s)
-                    var errors = new List<string> { $"providerStatus={providerResult.ProviderStatus}", $"details={providerResult.RawResponse}" };
-                    return StatusCode((int)System.Net.HttpStatusCode.BadGateway, ApiResponse<object>.Fail("Provider rejected SMS", errors, System.Net.HttpStatusCode.BadGateway));
-                }
-
-                return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "SendOtp failed for phone {phone}", dto?.PhoneNumber);
-                var errors = new List<string> { ex.Message };
-                return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, ApiResponse<object>.Fail("Failed to send OTP", errors, System.Net.HttpStatusCode.InternalServerError));
-            }
-        }
-
-        // -----------------------
-        // Verify OTP (using 2Factor)
+        // Verify OTP login
         // -----------------------
         [HttpPost("verify-otp")]
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<object>>> VerifyOtp([FromBody] VerifyOtpDto dto)
         {
+            var entry = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
+            if (entry == null)
+                return BadRequest(ApiResponse<string>.Fail("OTP not found or expired", null, HttpStatusCode.BadRequest));
+
+            var verified = await _sms.VerifyOtpAsync(entry.SessionId!, dto.Otp);
+            if (!verified)
+                return Unauthorized(ApiResponse<string>.Fail("Invalid or expired OTP", null, HttpStatusCode.Unauthorized));
+
+            await _otps.MarkUsedAsync(entry.Id!);
+
+            var user = await _users.GetByPhoneAsync(dto.PhoneNumber);
+            if (user == null)
+            {
+                user = new User
+                {
+                    PhoneNumber = dto.PhoneNumber,
+                    PhoneVerified = true,
+                    Roles = new[] { "User" },
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _users.CreateAsync(user);
+            }
+            else if (!user.PhoneVerified)
+            {
+                user.PhoneVerified = true;
+                await _users.UpdateAsync(user.Id!, user);
+            }
+
+            // Referral redemption
             try
             {
-                var entry = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
-                if (entry is null)
-                {
-                    var resp = ApiResponse<string>.Fail("OTP not found or expired. Request a new one.", null, HttpStatusCode.BadRequest);
-                    return BadRequest(resp);
-                }
-
-                // Verify OTP with 2Factor API
-                var verified = await _sms.VerifyOtpAsync(entry.SessionId!, dto.Otp);
-
-                if (!verified)
-                {
-                    var resp = ApiResponse<string>.Fail("Invalid or expired OTP.", null, HttpStatusCode.Unauthorized);
-                    return Unauthorized(resp);
-                }
-
-                // Mark entry used (optional)
-                await _otps.MarkUsedAsync(entry.Id!);
-
-                // Find or create user
-                var user = await _users.GetByPhoneAsync(dto.PhoneNumber);
-                if (user is null)
-                {
-                    user = new User
-                    {
-                        PhoneNumber = dto.PhoneNumber,
-                        PhoneVerified = true,
-                        Roles = new[] { "User" },
-                        CreatedAt = DateTime.UtcNow
-                    };
-                    await _users.CreateAsync(user);
-                }
-                else if (!user.PhoneVerified)
-                {
-                    user.PhoneVerified = true;
-                    await _users.UpdateAsync(user.Id!, user);
-                }
-
-                // Generate JWT and refresh token
-                var accessToken = _jwt.GenerateToken(user);
-                var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd2) ? rd2 : 30;
-                var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
-                refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
-                user.AddRefreshToken(refreshToken);
-                user.LastLoginAt = DateTime.UtcNow;
-                await _users.UpdateAsync(user.Id!, user);
-
-                SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
-
-                var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.PhoneNumber } };
-
-                return Ok(ApiResponse<object>.Ok(data, "OTP verified successfully"));
+                var (redeemed, err) = await _referralService.RedeemReferralOnSignupAsync(user.Id!, user.Email, user.PhoneNumber);
+                if (redeemed)
+                    _logger.LogInformation("Referral redeemed on OTP signup for {UserId}", user.Id);
             }
             catch (Exception ex)
             {
-                var resp = ApiResponse<string>.Fail($"OTP verification failed: {ex.Message}", null, HttpStatusCode.InternalServerError);
-                return StatusCode((int)HttpStatusCode.InternalServerError, resp);
+                _logger.LogError(ex, "Referral redemption failed on OTP signup {Phone}", dto.PhoneNumber);
             }
-        }
 
+            var accessToken = _jwt.GenerateToken(user);
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
+            var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
+            refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            user.AddRefreshToken(refreshToken);
+            user.LastLoginAt = DateTime.UtcNow;
+            await _users.UpdateAsync(user.Id!, user);
+            SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
+
+            var data = new
+            {
+                token = accessToken,
+                refreshToken = refreshToken.Token,
+                user = new { user.Id, user.PhoneNumber, LoyaltyPoints = user.LoyaltyPoints }
+            };
+
+            return Ok(ApiResponse<object>.Ok(data, "OTP verified successfully"));
+        }
 
         // -----------------------
         // Google login
@@ -424,38 +235,18 @@ namespace ShoppingPlatform.Controllers
                     Audience = new[] { _googleSettings.ClientId }
                 });
             }
-            catch (Google.Apis.Auth.InvalidJwtException)
+            catch
             {
-                // token invalid / signature failure / expired
-                var resp = ApiResponse<string>.Fail("Invalid or expired Google token", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
+                return Unauthorized(ApiResponse<string>.Fail("Invalid or expired Google token", null, HttpStatusCode.Unauthorized));
             }
 
-            // basic checks
-            if (payload == null || string.IsNullOrEmpty(payload.Email))
-            {
-                var resp = ApiResponse<string>.Fail("Google token missing email", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
+            if (string.IsNullOrEmpty(payload.Email))
+                return Unauthorized(ApiResponse<string>.Fail("Google token missing email", null, HttpStatusCode.Unauthorized));
 
-            // optional but recommended: require email verified
-            if (payload.EmailVerified != true)
-            {
-                var resp = ApiResponse<string>.Fail("Google account email not verified", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            // optional: explicit issuer check (extra safety)
-            if (payload.Issuer != "accounts.google.com" && payload.Issuer != "https://accounts.google.com")
-            {
-                var resp = ApiResponse<string>.Fail("Invalid token issuer", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            // now upsert user
             var user = await _users.GetByEmailAsync(payload.Email);
+            var isNew = false;
 
-            if (user is null)
+            if (user == null)
             {
                 user = new User
                 {
@@ -466,179 +257,46 @@ namespace ShoppingPlatform.Controllers
                     },
                     Roles = new[] { "User" },
                     CreatedAt = DateTime.UtcNow,
-                    EmailVerified = payload.EmailVerified // if you have this field on User
+                    EmailVerified = payload.EmailVerified
                 };
                 await _users.CreateAsync(user);
+                isNew = true;
             }
-            else
+
+            if (isNew)
             {
-                // ensure Providers list exists before adding
-                user.Providers ??= new System.Collections.Generic.List<ProviderInfo>();
-
-                var already = user.Providers.Exists(p => p.Provider == "Google" && p.ProviderId == payload.Subject);
-                if (!already)
+                try
                 {
-                    user.Providers.Add(new ProviderInfo { Provider = "Google", ProviderId = payload.Subject });
-                    // update email verified flag if you store it
-                    if (payload.EmailVerified == true)
-                        user.EmailVerified = true;
-
-                    await _users.UpdateAsync(user.Id!, user);
+                    var (redeemed, err) = await _referralService.RedeemReferralOnSignupAsync(user.Id!, user.Email, user.PhoneNumber);
+                    if (redeemed)
+                        _logger.LogInformation("Referral redeemed on Google signup for {UserId}", user.Id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Referral redemption failed on Google signup for {Email}", user.Email);
                 }
             }
 
-            // generate tokens
             var accessToken = _jwt.GenerateToken(user);
-            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd3) ? rd3 : 30;
+            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
             var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
             refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
             user.AddRefreshToken(refreshToken);
             await _users.UpdateAsync(user.Id!, user);
-
             SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
 
-            var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.Email, user.FullName } };
+            var data = new
+            {
+                token = accessToken,
+                refreshToken = refreshToken.Token,
+                user = new { user.Id, user.Email, user.FullName, LoyaltyPoints = user.LoyaltyPoints }
+            };
+
             return Ok(ApiResponse<object>.Ok(data, "Google login successful"));
         }
 
-
         // -----------------------
-        // Refresh token endpoint
-        // -----------------------
-        [HttpPost("refresh-token")]
-        [AllowAnonymous]
-        public async Task<ActionResult<ApiResponse<object>>> RefreshToken([FromBody] RefreshRequest? body)
-        {
-            // prefer cookie, fall back to body
-            var token = Request.Cookies["refreshToken"] ?? body?.RefreshToken;
-            if (string.IsNullOrEmpty(token))
-            {
-                var resp = ApiResponse<string>.Fail("Refresh token is required", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            // find user by refresh token - ensure your UserRepository implements this
-            var user = await _users.GetByRefreshTokenAsync(token);
-            if (user is null)
-            {
-                var resp = ApiResponse<string>.Fail("Invalid refresh token", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            var existing = user.GetRefreshToken(token);
-            if (existing == null)
-            {
-                var resp = ApiResponse<string>.Fail("Refresh token not found", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            if (!existing.IsActive)
-            {
-                // token reuse or expired - revoke all tokens for this user as precaution
-                foreach (var t in user.RefreshTokens)
-                {
-                    if (t.IsActive)
-                        t.RevokedAt = DateTime.UtcNow;
-                }
-                await _users.UpdateAsync(user.Id!, user);
-
-                var resp = ApiResponse<string>.Fail("Refresh token is no longer active", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            // rotate refresh token
-            var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd4) ? rd4 : 30;
-            var newRefresh = _jwt.GenerateRefreshToken(refreshDays);
-            newRefresh.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
-            // mark old token revoked and link replacedBy
-            existing.RevokedAt = DateTime.UtcNow;
-            existing.RevokedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            existing.ReplacedBy = newRefresh.Token;
-
-            user.AddRefreshToken(newRefresh);
-            // optional: user.PruneExpiredTokens();
-            await _users.UpdateAsync(user.Id!, user);
-
-            // new access token
-            var accessToken = _jwt.GenerateToken(user);
-
-            SetRefreshTokenCookie(newRefresh.Token, newRefresh.ExpiresAt);
-
-            var data = new { token = accessToken, refreshToken = newRefresh.Token, expiresInMinutes = _config["Jwt:ExpiryMinutes"] ?? "60" };
-            return Ok(ApiResponse<object>.Ok(data, "Token refreshed"));
-        }
-
-
-        // -----------------------
-        // Revoke refresh token (logout)
-        // -----------------------
-        [HttpPost("revoke-refresh-token")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> RevokeRefreshToken([FromBody] RevokeRequest req)
-        {
-            var token = req.RefreshToken ?? Request.Cookies["refreshToken"];
-            if (string.IsNullOrEmpty(token))
-            {
-                var resp = ApiResponse<string>.Fail("Token is required", null, HttpStatusCode.BadRequest);
-                return BadRequest(resp);
-            }
-
-            var user = await _users.GetByRefreshTokenAsync(token);
-            if (user is null)
-            {
-                var resp = ApiResponse<string>.Fail("Token not found", null, HttpStatusCode.NotFound);
-                return NotFound(resp);
-            }
-
-            var existing = user.GetRefreshToken(token);
-            if (existing == null || !existing.IsActive)
-            {
-                var resp = ApiResponse<string>.Fail("Token already revoked or expired", null, HttpStatusCode.BadRequest);
-                return BadRequest(resp);
-            }
-
-            existing.RevokedAt = DateTime.UtcNow;
-            existing.RevokedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            existing.RevokeReason = "revoked-by-user";
-
-            await _users.UpdateAsync(user.Id!, user);
-
-            // remove cookie if present
-            Response.Cookies.Delete("refreshToken");
-
-            var ok = ApiResponse<object>.Ok(null, "Token revoked");
-            return Ok(ok);
-        }
-
-        // -----------------------
-        // Me - protected
-        // -----------------------
-        [HttpGet("me")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> Me()
-        {
-            var uid = User.FindFirst("uid")?.Value;
-            if (uid is null)
-            {
-                var resp = ApiResponse<string>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized);
-                return Unauthorized(resp);
-            }
-
-            var user = await _users.GetByIdAsync(uid);
-            if (user is null)
-            {
-                var resp = ApiResponse<string>.Fail("User not found", null, HttpStatusCode.NotFound);
-                return NotFound(resp);
-            }
-
-            var data = new { user.Id, user.Email, user.FullName, user.Roles };
-            return Ok(ApiResponse<object>.Ok(data));
-        }
-
-        // -----------------------
-        // Helper: set refresh token cookie
+        // Helper
         // -----------------------
         private void SetRefreshTokenCookie(string token, DateTime expiresAt)
         {
@@ -646,150 +304,11 @@ namespace ShoppingPlatform.Controllers
             {
                 HttpOnly = true,
                 Expires = expiresAt,
-                Secure = true, // ensure HTTPS in production
+                Secure = true,
                 SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
                 Path = "/"
             };
             Response.Cookies.Append("refreshToken", token, cookieOptions);
         }
-
-        // -----------------------
-        // Addresses: list/add/update/delete (protected) - typed ApiResponse<T>
-        // -----------------------
-        [HttpGet("addresses")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<List<Address>>>> GetAddresses()
-        {
-            var uid = User.FindFirst("uid")?.Value;
-            if (uid is null)
-                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
-
-            var addresses = await _users.GetAddressesAsync(uid);
-            return Ok(ApiResponse<List<Address>>.Ok(addresses));
-        }
-
-        /// <summary>
-        /// Add address. If IsDefault==true, repository clears previous default.
-        /// Returns the user's addresses after add.
-        /// </summary>
-        [HttpPost("addresses")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<List<Address>>>> AddAddress([FromBody] CreateAddressDto dto)
-        {
-            var uid = User.FindFirst("uid")?.Value;
-            if (uid is null)
-                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
-
-            if (dto == null)
-                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, HttpStatusCode.BadRequest));
-
-            var address = new Address
-            {
-                Id = string.IsNullOrEmpty(dto.Id) ? null : dto.Id, // repo will generate id if null
-                FullName = dto.FullName,
-                Line1 = dto.Line1,
-                Line2 = dto.Line2,
-                City = dto.City,
-                State = dto.State,
-                Zip = dto.Zip,
-                Country = dto.Country,
-                IsDefault = dto.IsDefault
-            };
-
-            await _users.AddAddressAsync(uid, address);
-
-            var addresses = await _users.GetAddressesAsync(uid);
-            return Created("", ApiResponse<List<Address>>.Created(addresses, "Address added"));
-        }
-
-        /// <summary>
-        /// Update an existing address by id. If IsDefault==true, repository clears previous default.
-        /// Returns the user's addresses after update.
-        /// </summary>
-        [HttpPut("addresses/{addressId}")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<List<Address>>>> UpdateAddress(string addressId, [FromBody] UpdateAddressDto dto)
-        {
-            // Accept both "uid" and "sub" claims from JWT (fallback)
-            var uid = User.FindFirst("uid")?.Value ?? User.FindFirst("sub")?.Value;
-            if (uid is null)
-                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized - user id claim not found", null, System.Net.HttpStatusCode.Unauthorized));
-
-            if (dto == null)
-                return BadRequest(ApiResponse<List<Address>>.Fail("Invalid request", null, System.Net.HttpStatusCode.BadRequest));
-
-            // Build the Address model to update
-            var address = new Address
-            {
-                Id = addressId,
-                FullName = dto.FullName,
-                Line1 = dto.Line1,
-                Line2 = dto.Line2,
-                City = dto.City,
-                State = dto.State,
-                Zip = dto.Zip,
-                Country = dto.Country,
-                IsDefault = dto.IsDefault
-            };
-
-            var updated = await _users.UpdateAddressAsync(uid, address);
-            if (!updated)
-                return NotFound(ApiResponse<List<Address>>.Fail("Address not found or not owned by user", null, System.Net.HttpStatusCode.NotFound));
-
-            var addresses = await _users.GetAddressesAsync(uid);
-            return Ok(ApiResponse<List<Address>>.Ok(addresses, "Address updated"));
-        }
-
-        /// <summary>
-        /// Delete an address. Returns user's addresses after deletion.
-        /// </summary>
-        [HttpDelete("addresses/{addressId}")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<List<Address>>>> DeleteAddress(string addressId)
-        {
-            var uid = User.FindFirst("uid")?.Value;
-            if (uid is null)
-                return Unauthorized(ApiResponse<List<Address>>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
-
-            var ok = await _users.RemoveAddressAsync(uid, addressId);
-            if (!ok) return NotFound(ApiResponse<List<Address>>.Fail("Address not found", null, HttpStatusCode.NotFound));
-
-            var addresses = await _users.GetAddressesAsync(uid);
-            return Ok(ApiResponse<List<Address>>.Ok(addresses, "Address removed"));
-        }
-
-        // -----------------------
-        // Update user full name (small profile edit) - typed ApiResponse<T>
-        // -----------------------
-        [HttpPatch("name")]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<User>>> UpdateName([FromBody] UpdateNameDto dto)
-        {
-            var uid = User.FindFirst("uid")?.Value;
-            if (uid is null)
-                return Unauthorized(ApiResponse<User>.Fail("Unauthorized", null, HttpStatusCode.Unauthorized));
-
-            if (dto == null || string.IsNullOrWhiteSpace(dto.FullName))
-                return BadRequest(ApiResponse<User>.Fail("fullName is required", null, HttpStatusCode.BadRequest));
-
-            var ok = await _users.UpdateUserNameAsync(uid, dto.FullName.Trim());
-            if (!ok) return NotFound(ApiResponse<User>.Fail("User not found", null, HttpStatusCode.NotFound));
-
-            var user = await _users.GetByIdAsync(uid);
-            return Ok(ApiResponse<User>.Ok(user!, "Name updated"));
-        }
-    }
-
-    // -----------------------
-    // DTOs for refresh/revoke (keep or move to DTOs folder)
-    // -----------------------
-    public class RefreshRequest
-    {
-        public string? RefreshToken { get; set; }
-    }
-
-    public class RevokeRequest
-    {
-        public string? RefreshToken { get; set; }
     }
 }

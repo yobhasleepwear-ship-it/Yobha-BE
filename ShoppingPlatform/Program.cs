@@ -135,6 +135,7 @@ builder.Services.AddSingleton<IStorageService, S3StorageService>();
 builder.Services.AddScoped<ICouponRepository, CouponRepository>();
 builder.Services.AddScoped<ICouponService, CouponService>();
 builder.Services.AddScoped<IReferralRepository, ReferralRepository>();
+builder.Services.AddScoped<ReferralService>();
 
 
 // Avoid duplicate registrations; add HttpClient for Razorpay
