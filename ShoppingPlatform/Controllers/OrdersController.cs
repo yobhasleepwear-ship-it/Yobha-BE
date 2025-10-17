@@ -87,8 +87,6 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpPost]
         [Authorize]
-        [HttpPost]
-        [Authorize]
         public async Task<ActionResult<ApiResponse<object>>> Create([FromBody] CreateOrderRequest? request)
         {
             var userId = User.GetUserIdOrAnonymous();
