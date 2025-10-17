@@ -33,7 +33,7 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<CartItemResponse>>> AddOrUpdate([FromBody] AddOrUpdateCartRequest request)
         {
             var userId = User.GetUserIdOrAnonymous();
-            var item = await _repo.AddOrUpdateAsync(userId, request.ProductId, request.VariantSku, request.Quantity, request.Currency, request.Note);
+            var item = await _repo.AddOrUpdateAsync(userId, request.ProductId, request.Size, request.Quantity, request.Currency, request.Note);
             return Ok(ApiResponse<CartItemResponse>.Ok(item, "Added/Updated"));
         }
 

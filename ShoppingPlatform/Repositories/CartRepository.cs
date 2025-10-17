@@ -120,7 +120,7 @@ namespace ShoppingPlatform.Repositories
         }
 
         // Add or update. Returns the saved DTO.
-        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? variantSku, int quantity, string? currency, string? note = null)
+        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? size, int quantity, string? currency, string? note = null)
         {
             if (string.IsNullOrWhiteSpace(productId))
                 throw new ArgumentException("productId cannot be null or empty.");
@@ -129,75 +129,83 @@ namespace ShoppingPlatform.Repositories
             if (product == null)
                 throw new KeyNotFoundException($"Product with ProductId {productId} not found.");
 
-            // Resolve variant (if any)
-            ProductVariant? variant = null;
-            if (!string.IsNullOrWhiteSpace(variantSku) && product.Variants != null)
-            {
-                variant = product.Variants.FirstOrDefault(v => v.Sku == variantSku);
-            }
-
-            // Determine unit price
-            decimal unitPrice = variant?.PriceOverride ?? product.Price;
             string currencyToUse = string.IsNullOrWhiteSpace(currency) ? "INR" : currency!;
 
-            // If CountryPrices exist and currency requested, try to match
-            if (!string.Equals(currencyToUse, "INR", StringComparison.OrdinalIgnoreCase) && product.CountryPrices?.Any() == true)
+            // --- Resolve PriceList by Size + Currency ---
+            ShoppingPlatform.Models.Price? matchedTier = null;
+            if (product.PriceList?.Any() == true)
             {
-                var cp = product.CountryPrices.FirstOrDefault(c => string.Equals(c.Currency, currencyToUse, StringComparison.OrdinalIgnoreCase));
-                if (cp != null) unitPrice = cp.PriceAmount;
+                matchedTier = product.PriceList
+                    .FirstOrDefault(p => string.Equals(p.Size, size ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+                                         && string.Equals(p.Currency ?? "INR", currencyToUse, StringComparison.OrdinalIgnoreCase));
+                if (matchedTier == null)
+                {
+                    matchedTier = product.PriceList
+                        .FirstOrDefault(p => string.Equals(p.Size, size ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+                }
             }
 
-            // --- NEW: Check existing cart currency for this user ---
-            // Get any existing cart item for the user (we only need one to determine cart currency)
-            var existingCartItem = await _col
-                .Find(c => c.UserId == userId)
-                .SortBy(c => c.AddedAt)
-                .FirstOrDefaultAsync();
 
+            decimal unitPrice;
+            int availableStock;
+
+            if (matchedTier != null)
+            {
+                unitPrice = matchedTier.PriceAmount;
+                availableStock = matchedTier.Quantity;
+            }
+            else
+            {
+                // fallback: use product-level price & stock
+                unitPrice = product.Price;
+                availableStock = product.Stock;
+            }
+
+            // Country pricing - if currency differs and CountryPrices exist, prefer it (for shipping / suggestion)
+            CountryPrice? suggestedCountryPrice = null;
+            if (!string.Equals(currencyToUse, "INR", StringComparison.OrdinalIgnoreCase) && product.CountryPrices?.Any() == true)
+            {
+                suggestedCountryPrice = product.CountryPrices
+                    .FirstOrDefault(cp => string.Equals(cp.Currency, currencyToUse, StringComparison.OrdinalIgnoreCase));
+                if (suggestedCountryPrice != null)
+                {
+                    unitPrice = suggestedCountryPrice.PriceAmount;
+                }
+            }
+
+            // Currency consistency check against existing cart items
+            var existingCartItem = await _col.Find(c => c.UserId == userId).SortBy(c => c.AddedAt).FirstOrDefaultAsync();
             if (existingCartItem != null)
             {
                 var existingCurrency = string.IsNullOrWhiteSpace(existingCartItem.Currency) ? "INR" : existingCartItem.Currency;
-
                 if (!string.Equals(existingCurrency, currencyToUse, StringComparison.OrdinalIgnoreCase))
                 {
-                    // Try to find a CountryPrice on the product that matches the existing cart currency
-                    CountryPrice? suggested = null;
-                    if (product.CountryPrices?.Any() == true)
-                    {
-                        suggested = product.CountryPrices
-                            .FirstOrDefault(cp => string.Equals(cp.Currency, existingCurrency, StringComparison.OrdinalIgnoreCase));
-                    }
-
-                    // Return failure response with suggestion if any
                     return new CartItemResponse
                     {
                         Success = false,
-                        Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. " +
-                                  $"This product is in '{currencyToUse}'. To add this product, select the product currency matching '{existingCurrency}' or clear the cart.",
-                        SuggestedCountryPrice = suggested
+                        Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.",
+                        SuggestedCountryPrice = suggestedCountryPrice
                     };
                 }
             }
-            // --- end currency check ---
 
-            // Build snapshot
+            // Build snapshot using matchedTier / product fallback
             var snapshot = new CartProductSnapshot
             {
                 ProductId = product.ProductId,
                 ProductObjectId = product.Id,
                 Name = product.Name,
                 Slug = product.Slug,
-                ThumbnailUrl = variant?.Images?.FirstOrDefault()?.Url ?? product.Images?.FirstOrDefault()?.Url,
-                VariantSku = variant?.Sku,
-                VariantId = variant?.Id,
-                VariantSize = variant?.Size,
-                VariantColor = variant?.Color,
-                UnitPrice = unitPrice,
+                ThumbnailUrl = product.Images?.FirstOrDefault()?.Url,
+                VariantSku = size,             // store chosen size into VariantSku for backwards compat
+                VariantId = matchedTier?.Id,
+                VariantSize = size,
+                UnitPrice = Math.Round(unitPrice, 2),
                 CompareAtPrice = product.CompareAtPrice,
                 Currency = currencyToUse,
-                StockQuantity = variant?.Quantity ?? product.Stock,
+                StockQuantity = availableStock,
                 ReservedQuantity = 0,
-                IsActive = product.IsActive && (variant?.IsActive ?? true),
+                IsActive = product.IsActive,
                 FreeShipping = product.FreeDelivery || product.ShippingInfo?.FreeShipping == true,
                 CashOnDelivery = product.ShippingInfo?.CashOnDelivery ?? false,
                 PriceList = product.PriceList?.Select(p => new ShoppingPlatform.DTOs.PriceTier
@@ -208,19 +216,29 @@ namespace ShoppingPlatform.Repositories
                     Quantity = p.Quantity,
                     Currency = p.Currency
                 }).ToList(),
-                countryPrice = product.CountryPrices.Where(c => c.Currency == currency).FirstOrDefault()
+                countryPrice = suggestedCountryPrice,
+                Size = size
             };
 
-            // compute sku to match outside the expression tree
-            var skuToMatch = variant?.Sku ?? variantSku ?? string.Empty;
+            // use size stored in VariantSku to identify item in cart collection
+            var skuToMatch = size ?? string.Empty;
 
-            // Look for existing cart item for the same product+variant
-            var existing = await _col
-                .Find(c => c.UserId == userId && c.ProductId == productId && c.VariantSku == skuToMatch)
-                .FirstOrDefaultAsync();
+            var existing = await _col.Find(c => c.UserId == userId && c.ProductId == productId && c.VariantSku == skuToMatch).FirstOrDefaultAsync();
 
             if (existing != null)
             {
+                // If requested quantity > availableStock, still allow but warn (or reject - choose behavior)
+                if (availableStock < quantity)
+                {
+                    // You may prefer to return failure instead of adding with smaller stock.
+                    return new CartItemResponse
+                    {
+                        Success = false,
+                        Message = $"Insufficient stock for {product.Name} ({skuToMatch}). Available: {availableStock}",
+                        Product = snapshot
+                    };
+                }
+
                 var update = Builders<CartItem>.Update
                     .Set(c => c.Quantity, quantity)
                     .Set(c => c.Price, unitPrice)
@@ -236,13 +254,24 @@ namespace ShoppingPlatform.Repositories
             }
             else
             {
+                // creation
+                if (availableStock < quantity)
+                {
+                    return new CartItemResponse
+                    {
+                        Success = false,
+                        Message = $"Insufficient stock for {product.Name} ({skuToMatch}). Available: {availableStock}",
+                        Product = snapshot
+                    };
+                }
+
                 var newItem = new CartItem
                 {
                     UserId = userId,
                     ProductId = product.ProductId,
                     ProductObjectId = product.Id,
                     ProductName = product.Name,
-                    VariantSku = skuToMatch,
+                    VariantSku = skuToMatch,            // store size here for compatibility with Order flow
                     Quantity = quantity,
                     Price = unitPrice,
                     Currency = currencyToUse,

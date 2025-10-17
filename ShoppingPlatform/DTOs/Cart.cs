@@ -8,7 +8,8 @@ namespace ShoppingPlatform.DTOs
     public class AddOrUpdateCartRequest
     {
         [Required] public string ProductId { get; set; } = string.Empty; // readable PID (ex: PID10001)
-        public string? VariantSku { get; set; } = string.Empty; // optional — variant sku if product has variants
+                                                                         // front-end will send Size (e.g. "M","L","32")
+        public string? Size { get; set; } = string.Empty;
         [Range(1, 9999)] public int Quantity { get; set; } = 1;
 
         // Optional: client can pass the currency preference (server will validate)
@@ -17,6 +18,7 @@ namespace ShoppingPlatform.DTOs
         // Optional: if client wants to add any note / metadata for this item
         public string? Note { get; set; }
     }
+
 
     public class UpdateCartQuantityRequest
     {
@@ -48,7 +50,7 @@ namespace ShoppingPlatform.DTOs
         public bool IsActive { get; set; } = true;
         public bool FreeShipping { get; set; } = false;
         public bool CashOnDelivery { get; set; } = false;
-
+        public string Size { get; set; }
         public List<ShoppingPlatform.DTOs.PriceTier>? PriceList { get; set; }
         public CountryPrice? countryPrice { get; set; }
     }   
