@@ -110,63 +110,63 @@ namespace ShoppingPlatform.Controllers
                     First100UsersOnly = c.GlobalUsageLimit.HasValue && c.GlobalUsageLimit.Value == 100
                 };
 
-                // --- Validation sequence ---
-                if (!c.IsActive)
-                {
-                    dto.IsValid = false; dto.InvalidReason = "Coupon inactive";
-                    result.Add(dto); continue;
-                }
+                //// --- Validation sequence ---
+                //if (!c.IsActive)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = "Coupon inactive";
+                //    result.Add(dto); continue;
+                //}
 
-                if (c.StartAt.HasValue && c.StartAt.Value > now)
-                {
-                    dto.IsValid = false; dto.InvalidReason = "Coupon not active yet";
-                    result.Add(dto); continue;
-                }
+                //if (c.StartAt.HasValue && c.StartAt.Value > now)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = "Coupon not active yet";
+                //    result.Add(dto); continue;
+                //}
 
-                if (c.EndAt.HasValue && c.EndAt.Value < now)
-                {
-                    dto.IsValid = false; dto.InvalidReason = "Coupon expired";
-                    result.Add(dto); continue;
-                }
+                //if (c.EndAt.HasValue && c.EndAt.Value < now)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = "Coupon expired";
+                //    result.Add(dto); continue;
+                //}
 
-                if (c.GlobalUsageLimit.HasValue && c.UsedCount >= c.GlobalUsageLimit.Value)
-                {
-                    dto.IsValid = false; dto.InvalidReason = "Coupon fully redeemed";
-                    result.Add(dto); continue;
-                }
+                //if (c.GlobalUsageLimit.HasValue && c.UsedCount >= c.GlobalUsageLimit.Value)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = "Coupon fully redeemed";
+                //    result.Add(dto); continue;
+                //}
 
                 // Per-user usage check
                 var userUsed = await _repo.HasUserUsedAsync(c.Id!, userId);
-                if (c.PerUserUsageLimit.HasValue && userUsed && c.PerUserUsageLimit.Value <= 1)
+                if (userUsed)
                 {
                     dto.IsValid = false; dto.InvalidReason = "Already used by this user";
                     result.Add(dto); continue;
                 }
 
                 // First order only
-                if (c.FirstOrderOnly)
-                {
-                    var priorOrders = await _orderRepo.GetUserOrderCountAsync(userId);
-                    if (priorOrders > 0)
-                    {
-                        dto.IsValid = false; dto.InvalidReason = "Coupon valid only on first order";
-                        result.Add(dto); continue;
-                    }
-                }
+                //if (c.FirstOrderOnly)
+                //{
+                //    var priorOrders = await _orderRepo.GetUserOrderCountAsync(userId);
+                //    if (priorOrders > 0)
+                //    {
+                //        dto.IsValid = false; dto.InvalidReason = "Coupon valid only on first order";
+                //        result.Add(dto); continue;
+                //    }
+                //}
 
-                // First 100 users only (explicit limit)
-                if (c.GlobalUsageLimit.HasValue && c.GlobalUsageLimit.Value == 100 && c.UsedCount >= c.GlobalUsageLimit)
-                {
-                    dto.IsValid = false; dto.InvalidReason = "Coupon limited to first 100 users and fully claimed";
-                    result.Add(dto); continue;
-                }
+                //// First 100 users only (explicit limit)
+                //if (c.GlobalUsageLimit.HasValue && c.GlobalUsageLimit.Value == 100 && c.UsedCount >= c.GlobalUsageLimit)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = "Coupon limited to first 100 users and fully claimed";
+                //    result.Add(dto); continue;
+                //}
 
-                // Min order amount
-                if (c.MinOrderAmount.HasValue && orderAmt > 0 && orderAmt < c.MinOrderAmount.Value)
-                {
-                    dto.IsValid = false; dto.InvalidReason = $"Minimum order value ₹{c.MinOrderAmount.Value} required";
-                    result.Add(dto); continue;
-                }
+                //// Min order amount
+                //if (c.MinOrderAmount.HasValue && orderAmt > 0 && orderAmt < c.MinOrderAmount.Value)
+                //{
+                //    dto.IsValid = false; dto.InvalidReason = $"Minimum order value ₹{c.MinOrderAmount.Value} required";
+                //    result.Add(dto); continue;
+                //}
 
                 // Estimate discount
                 if (orderAmt > 0)
@@ -199,6 +199,7 @@ namespace ShoppingPlatform.Controllers
 
             return Ok(ApiResponse<CouponRes>.Ok(response, "OK"));
         }
+
 
     }
 
