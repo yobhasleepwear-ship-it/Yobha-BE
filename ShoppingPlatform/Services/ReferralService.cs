@@ -52,21 +52,19 @@ namespace ShoppingPlatform.Services
         {
             if (string.IsNullOrWhiteSpace(newUserId)) return (false, "newUserId required");
 
-            // Normalize inputs similar to creation
             var normEmail = string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
             var normPhone = string.IsNullOrWhiteSpace(phone) ? null : phone.Trim();
 
             var referral = await _refRepo.FindUnredeemedByEmailOrPhoneAsync(normEmail ?? string.Empty, normPhone ?? string.Empty);
             if (referral == null) return (false, null); // no referral to redeem
 
-            // Attempt transaction: mark referral redeemed + increment referrer's loyalty points
             IClientSessionHandle? session = null;
             try
             {
                 session = await _db.Client.StartSessionAsync();
                 session.StartTransaction();
 
-                // mark referral redeemed
+                // mark referral redeemed (ideally this repo method should accept session)
                 var marked = await _refRepo.MarkRedeemedAsync(referral.Id!, newUserId);
                 if (!marked)
                 {
@@ -74,14 +72,25 @@ namespace ShoppingPlatform.Services
                     return (false, "Referral could not be marked redeemed (possibly raced)");
                 }
 
-                // increment loyalty points for referrer
-                var update = Builders<User>.Update.Inc(u => u.LoyaltyPoints, _pointsToAward);
+                // ---- SAFELY update loyalty points: read referrer, treat null as 0, set new value ----
+                // NOTE: requires a session-aware GetByIdAsync on your UserRepository. If you don't have it,
+                // either add it or use the pipeline approach from Option B.
+                var referrer = await GetByIdAsync(session, referral.ReferrerUserId);
+                if (referrer == null)
+                {
+                    await session.AbortTransactionAsync();
+                    return (false, "Referrer user not found");
+                }
+
+                var currentPoints = referrer.LoyaltyPoints ?? 0;
+                var newPoints = currentPoints + _pointsToAward;
+
+                var update = Builders<User>.Update.Set(u => u.LoyaltyPoints, newPoints);
                 var userRes = await _users.UpdateOneAsync(session, u => u.Id == referral.ReferrerUserId, update);
                 if (userRes.ModifiedCount == 0)
                 {
-                    // Referrer not found: rollback and return failure
                     await session.AbortTransactionAsync();
-                    return (false, "Referrer user not found");
+                    return (false, "Failed to update referrer points");
                 }
 
                 await session.CommitTransactionAsync();
@@ -89,24 +98,34 @@ namespace ShoppingPlatform.Services
             }
             catch (Exception ex)
             {
-                // If transaction not supported or failed, attempt fallback (best-effort)
                 if (session != null)
                 {
                     try { await session.AbortTransactionAsync(); } catch { }
                 }
 
-                // Fallback: non-transactional sequence (try to mark referral then increment points)
+                // Fallback (best-effort) - non transactional
                 try
                 {
                     var markOk = await _refRepo.MarkRedeemedAsync(referral.Id!, newUserId);
                     if (!markOk) return (false, "Referral could not be marked redeemed (fallback)");
-                    var update = Builders<User>.Update.Inc(u => u.LoyaltyPoints, _pointsToAward);
-                    var res = await _users.UpdateOneAsync(u => u.Id == referral.ReferrerUserId, update);
+
+                    // fallback update using pipeline directly on collection if available
+                    // (preferred fallback) OR read-modify-write without transaction:
+                    var referrerFallback = await GetByIdAsync(referral.ReferrerUserId);
+                    if (referrerFallback == null)
+                    {
+                        // attempt to undo referral mark if your repo supports undo; otherwise return failure
+                        return (false, "Referrer user not found (fallback)");
+                    }
+
+                    var curr = referrerFallback.LoyaltyPoints ?? 0;
+                    var newPts = curr + _pointsToAward;
+                    var upd = Builders<User>.Update.Set(u => u.LoyaltyPoints, newPts);
+                    var res = await _users.UpdateOneAsync(u => u.Id == referral.ReferrerUserId, upd);
                     if (res.ModifiedCount == 0)
                     {
-                        // compensation: try to unmark referral
-                        await _refRepo.MarkRedeemedAsync(referral.Id!, null!); // note: this line won't unredeem in our current API; implement Undo if needed
-                        return (false, "Referrer user not found (fallback)");
+                        // compensation left as TODO: implement UndoMarkRedeemed if you need strict consistency
+                        return (false, "Referrer user not found (fallback update failed)");
                     }
                     return (true, null);
                 }
@@ -120,10 +139,25 @@ namespace ShoppingPlatform.Services
                 session?.Dispose();
             }
         }
+
         public async Task<List<Referral>> GetReferralsByReferrerAsync(string referrerUserId)
         {
             // implement using IReferralRepository; add repository method if missing
             return await _refRepo.GetByReferrerAsync(referrerUserId);
         }
+        public async Task<User?> GetByIdAsync(IClientSessionHandle session, string userId)
+        {
+            return await _users
+                .Find(session, u => u.Id == userId)
+                .FirstOrDefaultAsync();
+        }
+        public async Task<User?> GetByIdAsync(string userId)
+        {
+            return await _users
+                .Find(u => u.Id == userId)
+                .FirstOrDefaultAsync();
+        }
+
+
     }
 }
