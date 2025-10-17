@@ -200,6 +200,23 @@ namespace ShoppingPlatform.Controllers
             return Ok(ApiResponse<CouponRes>.Ok(response, "OK"));
         }
 
+        [HttpGet("all")]
+        [Authorize] // keep it restricted on prod; change to AllowAnonymous if you need open access temporarily
+        public async Task<IActionResult> GetAllTyped()
+        {
+            try
+            {
+                var coupons = await _repo.GetActiveCouponsAsync(); // existing method or use below repo code
+                return Ok(ApiResponse<List<Coupon>>.Ok(coupons, "OK"));
+            }
+            catch (Exception ex)
+            {
+                //_logger.LogError(ex, "GetAllTyped failed");
+                return StatusCode((int)HttpStatusCode.InternalServerError,
+                    ApiResponse<string>.Fail($"Failed to load typed coupons: {ex.Message}", null, HttpStatusCode.InternalServerError));
+            }
+        }
+
 
     }
 
