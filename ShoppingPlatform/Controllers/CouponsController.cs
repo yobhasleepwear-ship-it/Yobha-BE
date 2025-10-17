@@ -77,7 +77,7 @@ namespace ShoppingPlatform.Controllers
         // GET /api/coupons/active-for-me?orderAmount=1200
         [HttpGet("active-for-me")]
         [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> GetActiveForMe([FromQuery] decimal? orderAmount = null)
+        public async Task<ActionResult<ApiResponse<List<Coupon>>>> GetActiveForMe([FromQuery] decimal? orderAmount = null)
         {
             var userId = User.GetUserIdOrAnonymous();
 
@@ -93,7 +93,7 @@ namespace ShoppingPlatform.Controllers
 
             // fetch active coupons
             var coupons = await _repo.GetActiveCouponsAsync();
-            return Ok(ApiResponse<object>.Ok(coupons, "OK"));
+            return Ok(ApiResponse<List<Coupon>>.Ok(coupons, "OK"));
             var result = new List<CouponSummaryDto>();
             var orderAmt = orderAmount ?? 0m;
 
