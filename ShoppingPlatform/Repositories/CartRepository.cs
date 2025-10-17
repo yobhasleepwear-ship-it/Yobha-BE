@@ -207,7 +207,8 @@ namespace ShoppingPlatform.Repositories
                     PriceAmount = p.PriceAmount,
                     Quantity = p.Quantity,
                     Currency = p.Currency
-                }).ToList()
+                }).ToList(),
+                countryPrice = product.CountryPrices.Where(c => c.Currency == currency).FirstOrDefault()
             };
 
             // compute sku to match outside the expression tree

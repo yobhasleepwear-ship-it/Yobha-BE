@@ -1,6 +1,7 @@
 ﻿using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson;
 using System.ComponentModel.DataAnnotations;
+using ShoppingPlatform.Models;
 
 namespace ShoppingPlatform.DTOs
 {
@@ -49,6 +50,7 @@ namespace ShoppingPlatform.DTOs
         public bool CashOnDelivery { get; set; } = false;
 
         public List<ShoppingPlatform.DTOs.PriceTier>? PriceList { get; set; }
+        public CountryPrice? countryPrice { get; set; }
     }   
 
     public class PriceTier
