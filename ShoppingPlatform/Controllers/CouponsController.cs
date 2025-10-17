@@ -77,8 +77,6 @@ namespace ShoppingPlatform.Controllers
         // GET /api/coupons/active-for-me?orderAmount=1200
         [HttpGet("active-for-me")]
         [Authorize]
-        [HttpGet("active-for-me")]
-        [Authorize]
         public async Task<ActionResult<ApiResponse<CouponRes>>> GetActiveForMe([FromQuery] decimal? orderAmount = null)
         {
             var userId = User.GetUserIdOrAnonymous();
