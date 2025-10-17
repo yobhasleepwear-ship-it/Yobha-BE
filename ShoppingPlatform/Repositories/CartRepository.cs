@@ -163,10 +163,10 @@ namespace ShoppingPlatform.Repositories
 
             // Country pricing - if currency differs and CountryPrices exist, prefer it (for shipping / suggestion)
             CountryPrice? suggestedCountryPrice = null;
-            if (!string.Equals(currencyToUse, "INR", StringComparison.OrdinalIgnoreCase) && product.CountryPrices?.Any() == true)
+            if (product.CountryPrices?.Any() == true)
             {
                 suggestedCountryPrice = product.CountryPrices
-                    .FirstOrDefault(cp => string.Equals(cp.Currency, currencyToUse, StringComparison.OrdinalIgnoreCase));
+                    .FirstOrDefault(cp => string.Equals(cp.Currency ?? "INR", currencyToUse, StringComparison.OrdinalIgnoreCase));
                 if (suggestedCountryPrice != null)
                 {
                     unitPrice = suggestedCountryPrice.PriceAmount;
