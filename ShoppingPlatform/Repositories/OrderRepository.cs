@@ -104,6 +104,21 @@ namespace ShoppingPlatform.Repositories
             var result = await _col.DeleteOneAsync(filter);
             return result.DeletedCount == 1;
         }
+        public async Task<long> GetUserOrderCountAsync(string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+                return 0;
+
+            var filter = Builders<Order>.Filter.Eq(o => o.UserId, userId);
+
+            // Count only orders that are actually paid or confirmed
+            //var completedStatuses = new[] { "Paid", "Confirmed", "Delivered" };
+            //var statusFilter = Builders<Order>.Filter.In(o => o.PaymentStatus, completedStatuses);
+
+            //var combinedFilter = Builders<Order>.Filter.And(filter, statusFilter);
+
+            return await _col.CountDocumentsAsync(filter);
+        }
 
     }
 }

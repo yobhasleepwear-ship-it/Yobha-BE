@@ -458,38 +458,34 @@ namespace ShoppingPlatform.Repositories
             return res.ModifiedCount > 0;
         }
 
-        public async Task<bool> DecrementStockAsync(string productObjectId, int quantity)
+        public async Task<bool> DecrementStockAsync(string productObjectId, string size, string currency, int quantity)
         {
-            if (string.IsNullOrWhiteSpace(productObjectId) || quantity <= 0)
-                return false;
-
             var filter = Builders<Product>.Filter.And(
                 Builders<Product>.Filter.Eq(p => p.Id, productObjectId),
-                Builders<Product>.Filter.Gte(p => p.Stock, quantity)
+                Builders<Product>.Filter.ElemMatch(p => p.PriceList,
+                    pl => pl.Size == size && pl.Currency == currency && pl.Quantity >= quantity)
             );
 
             var update = Builders<Product>.Update
-                .Inc(p => p.Stock, -quantity)
-                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+                .Inc("PriceList.$.Stock", -quantity);
 
             var result = await _collection.UpdateOneAsync(filter, update);
-
-            // matchedCount=1 means product existed, modifiedCount=1 means stock decremented
-            return result.ModifiedCount == 1;
+            return result.ModifiedCount > 0;
         }
 
         /// <summary>
         /// Increments stock quantity (rollback or restock).
         /// </summary>
-        public async Task IncrementStockAsync(string productObjectId, int quantity)
+        public async Task IncrementStockAsync(string productObjectId, string size, string currency, int quantity)
         {
-            if (string.IsNullOrWhiteSpace(productObjectId) || quantity <= 0)
-                return;
+            var filter = Builders<Product>.Filter.And(
+                Builders<Product>.Filter.Eq(p => p.Id, productObjectId),
+                Builders<Product>.Filter.ElemMatch(p => p.PriceList,
+                    pl => pl.Size == size && pl.Currency == currency)
+            );
 
-            var filter = Builders<Product>.Filter.Eq(p => p.Id, productObjectId);
             var update = Builders<Product>.Update
-                .Inc(p => p.Stock, quantity)
-                .Set(p => p.UpdatedAt, DateTime.UtcNow);
+                .Inc("PriceList.$.Quantity", quantity);
 
             await _collection.UpdateOneAsync(filter, update);
         }

@@ -20,5 +20,8 @@ namespace ShoppingPlatform.Repositories
             CancellationToken ct);
         Task<bool> DeleteAsync(string id);
 
+        Task<long> GetUserOrderCountAsync(string userId);
+
+
     }
 }

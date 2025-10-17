@@ -232,7 +232,7 @@ namespace ShoppingPlatform.Controllers
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<object>>> Login([FromBody] LoginDto dto)
         {
-            var user = await _users.GetByEmailAsync(dto.Email);
+            var user = await _users.GetByEmailAsync(dto.Email);//GetByIdAsync
             if (user is null)
             {
                 var resp = ApiResponse<string>.Fail("Invalid credentials", null, HttpStatusCode.Unauthorized);

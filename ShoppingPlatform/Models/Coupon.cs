@@ -37,7 +37,7 @@ namespace ShoppingPlatform.Models
         public int? PerUserUsageLimit { get; set; } = 1;
 
         /// <summary>list of userIds who have used the coupon (used to prevent reuse)</summary>
-        public List<string> UsedByUserIds { get; set; } = new();
+        public List<string>? UsedByUserIds { get; set; } = new();
 
         // Convenience flags
         public bool IsActive { get; set; } = true;
@@ -50,5 +50,7 @@ namespace ShoppingPlatform.Models
         // Metadata
         public string? CreatedByUserId { get; set; }      // admin who created it
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public string Description { get; set; } = string.Empty;
+
     }
 }
