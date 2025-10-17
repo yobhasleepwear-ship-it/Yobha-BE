@@ -18,6 +18,7 @@ namespace ShoppingPlatform.Models
         public string? Id { get; set; }
 
         public string Code { get; set; } = null!;         // e.g., "FIRST100", unique (uppercase)
+        [BsonRepresentation(BsonType.String)]
         public CouponType Type { get; set; }              // Percentage or Fixed
         public decimal Value { get; set; }                // 30 for 30% or 100 for ₹100 off
 
