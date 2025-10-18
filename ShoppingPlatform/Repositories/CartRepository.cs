@@ -181,14 +181,14 @@ namespace ShoppingPlatform.Repositories
                 if (!string.Equals(existingCurrency, currencyToUse, StringComparison.OrdinalIgnoreCase))
                 {
 
-                    throw new ArgumentException($"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.");
+                    //throw new ArgumentException($"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.");
 
-                    //return new CartItemResponse
-                    //{
-                    //    Success = false,
-                    //    Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.",
-                    //    SuggestedCountryPrice = suggestedCountryPrice
-                    //};
+                    return new CartItemResponse
+                    {
+                        Success = false,
+                        Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.",
+                        SuggestedCountryPrice = suggestedCountryPrice
+                    };
                 }
             }
 
