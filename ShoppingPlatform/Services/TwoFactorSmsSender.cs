@@ -1,16 +1,16 @@
-﻿// File: Services/TwoFactorSmsSender.cs
-using System;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Newtonsoft.Json.Linq;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Sms;
-using static System.Net.WebRequestMethods;
 
 namespace ShoppingPlatform.Services
 {
@@ -22,6 +22,9 @@ namespace ShoppingPlatform.Services
         private readonly ILogger<TwoFactorSmsSender> _logger;
         private readonly IHttpClientFactory _httpFactory;
 
+        // Fixed template details (use these exact values)
+        private const string FixedTemplateName = "SENDOTP";
+        private const string FixedSenderId = "YOBHAS";
 
         public TwoFactorSmsSender(
             TwoFactorService svc,
@@ -33,7 +36,9 @@ namespace ShoppingPlatform.Services
             _svc = svc ?? throw new ArgumentNullException(nameof(svc));
             _cfg = opts?.Value ?? new TwoFactorSettings();
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _httpFactory = httpFactory ?? throw new ArgumentNullException(nameof(httpFactory));
 
+            // Resolve API key (same lookup strategy you had)
             var fromConfig = configuration["TwoFactor:ApiKey"];
             var fromSettings = _cfg?.ApiKey;
             var fromEnvDouble = Environment.GetEnvironmentVariable("TWOFACTOR__APIKEY");
@@ -48,10 +53,9 @@ namespace ShoppingPlatform.Services
                 _logger.LogError("TwoFactor API key not configured (checked TwoFactor:ApiKey, env vars, settings).");
             else
                 _logger.LogInformation("TwoFactor API key loaded (len={len})", _apiKey.Length);
-            _httpFactory = httpFactory;
         }
 
-        // Generate OTP and call TwoFactorService
+        // Generate OTP and call 2Factor provider
         public async Task<ProviderResult> SendOtpAsync(string phoneNumber)
         {
             if (string.IsNullOrWhiteSpace(_apiKey))
@@ -60,14 +64,18 @@ namespace ShoppingPlatform.Services
             if (string.IsNullOrWhiteSpace(phoneNumber))
                 throw new ArgumentException(nameof(phoneNumber));
 
-            // generate OTP locally (can be removed if provider generates OTP)
+            // generate OTP locally (provider may also generate — keep for template variable)
             var otp = new Random().Next(100000, 999999).ToString();
 
             var var1 = _cfg.DefaultVar1 ?? "Customer";
             var var2 = otp;
 
+            // We use the fixed template and sender values intentionally
+            var templateName = FixedTemplateName;
+            var sender = FixedSenderId;
+
             _logger.LogInformation("Preparing to send OTP; phone={phoneMask} template={template} sender={sender}",
-                MaskPhone(phoneNumber), _cfg.TemplateName ?? _cfg.TemplateId ?? "unknown", _cfg.SenderId ?? "YOBHAS");
+                MaskPhone(phoneNumber), templateName, sender);
 
             static string NormalizePhone(string phone)
             {
@@ -79,8 +87,6 @@ namespace ShoppingPlatform.Services
             }
 
             var normalizedPhone = NormalizePhone(phoneNumber);
-            var templateName = _cfg.TemplateName ?? _cfg.TemplateId ?? "SENDOTP";
-            var sender = _cfg.SenderId ?? "YOBHAS";
 
             var form = new List<KeyValuePair<string, string>>
             {
@@ -92,7 +98,7 @@ namespace ShoppingPlatform.Services
             if (!string.IsNullOrWhiteSpace(var1)) form.Add(new KeyValuePair<string, string>("VAR1", var1));
             if (!string.IsNullOrWhiteSpace(var2)) form.Add(new KeyValuePair<string, string>("VAR2", var2));
 
-            // Use normalizedPhone in URL
+            // Use normalizedPhone in URL (important)
             var url = $"https://2factor.in/API/V1/{_apiKey}/SMS/{normalizedPhone}/AUTOGEN/{sender}";
 
             _logger.LogDebug("TwoFactor: sending POST to {urlMasked} with keys={keys}",
@@ -171,21 +177,6 @@ namespace ShoppingPlatform.Services
                 result.ProviderStatus = "PARSE_ERROR";
                 return result;
             }
-
-            static string MaskPhone(string? phone)
-            {
-                if (string.IsNullOrEmpty(phone)) return string.Empty;
-                var digits = Regex.Replace(phone, @"\D", "");
-                if (digits.Length <= 4) return new string('*', digits.Length);
-                return new string('*', digits.Length - 4) + digits[^4..];
-            }
-            static string Truncate(string? s, int length) => string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= length ? s : s.Substring(0, length) + "...");
-            static string MaskKey(string s, int showRight = 4)
-            {
-                if (string.IsNullOrEmpty(s)) return string.Empty;
-                if (s.Length <= showRight) return new string('*', s.Length);
-                return new string('*', s.Length - showRight) + s[^showRight..];
-            }
         }
 
         public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
@@ -193,7 +184,27 @@ namespace ShoppingPlatform.Services
             if (string.IsNullOrWhiteSpace(_apiKey))
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
 
+            // delegate verify call to TwoFactorService (it will call the provider verify endpoint)
+            // Note: _svc.VerifyOtpAsync should accept parameters in this order: apiKey, sessionId, otp (existing behavior)
             return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+        }
+
+        // ---------------- helpers ----------------
+        private static string MaskPhone(string? phone)
+        {
+            if (string.IsNullOrEmpty(phone)) return string.Empty;
+            var digits = Regex.Replace(phone, @"\D", "");
+            if (digits.Length <= 4) return new string('*', digits.Length);
+            return new string('*', digits.Length - 4) + digits[^4..];
+        }
+
+        private static string Truncate(string? s, int length) => string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= length ? s : s.Substring(0, length) + "...");
+
+        private static string MaskKey(string s, int showRight = 4)
+        {
+            if (string.IsNullOrEmpty(s)) return string.Empty;
+            if (s.Length <= showRight) return new string('*', s.Length);
+            return new string('*', s.Length - showRight) + s[^showRight..];
         }
     }
 }
