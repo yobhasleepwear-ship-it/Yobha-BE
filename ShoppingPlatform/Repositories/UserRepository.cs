@@ -208,5 +208,18 @@ namespace ShoppingPlatform.Repositories
             return res.ModifiedCount > 0;
         }
 
+        public async Task<bool> checkFirst100User(string userId)
+        { 
+            var _100Users = await _collection
+                .Find(FilterDefinition<User>.Empty)
+                .Sort(Builders<User>.Sort.Ascending(u => u.CreatedAt))
+                .Limit(100)
+                .ToListAsync();
+
+            if(_100Users.Where(u=>u.Id==userId).FirstOrDefault() == null)
+                return false;
+
+            return true;
+        }
     }
 }
