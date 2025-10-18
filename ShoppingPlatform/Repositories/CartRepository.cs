@@ -180,12 +180,15 @@ namespace ShoppingPlatform.Repositories
                 var existingCurrency = string.IsNullOrWhiteSpace(existingCartItem.Currency) ? "INR" : existingCartItem.Currency;
                 if (!string.Equals(existingCurrency, currencyToUse, StringComparison.OrdinalIgnoreCase))
                 {
-                    return new CartItemResponse
-                    {
-                        Success = false,
-                        Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.",
-                        SuggestedCountryPrice = suggestedCountryPrice
-                    };
+
+                    throw new ArgumentException($"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.");
+
+                    //return new CartItemResponse
+                    //{
+                    //    Success = false,
+                    //    Message = $"Currency mismatch: your cart currently contains items in '{existingCurrency}'. This product is in '{currencyToUse}'.",
+                    //    SuggestedCountryPrice = suggestedCountryPrice
+                    //};
                 }
             }
 
