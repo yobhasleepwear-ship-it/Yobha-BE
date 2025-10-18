@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -10,6 +9,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.Options;
 using Google.Apis.Auth;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
@@ -28,6 +29,8 @@ namespace ShoppingPlatform.Controllers
         private readonly InviteRepository _invites;
         private readonly GoogleSettings _googleSettings;
         private readonly IConfiguration _config;
+        private readonly IHostEnvironment _env;
+        private readonly HashSet<string> _allowedReturnHosts;
 
         public GoogleAuthController(
             UserRepository users,
@@ -36,7 +39,8 @@ namespace ShoppingPlatform.Controllers
             JwtService jwt,
             InviteRepository invites,
             IConfiguration config,
-            IOptions<GoogleSettings> googleOptions)
+            IOptions<GoogleSettings> googleOptions,
+            IHostEnvironment env)
         {
             _users = users;
             _otps = otps;
@@ -44,18 +48,19 @@ namespace ShoppingPlatform.Controllers
             _jwt = jwt;
             _invites = invites;
             _config = config;
+            _env = env;
             _googleSettings = googleOptions.Value;
+
+            // Load allowed hosts from configuration (appsettings.json) if present.
+            // Example config key: "Auth:AllowedReturnHosts": [ "yobha.in", "localhost", "127.0.0.1", "yobha-test-env.vercel.app" ]
+            var hosts = _config.GetSection("Auth:AllowedReturnHosts").Get<string[]>() ?? Array.Empty<string>();
+            _allowedReturnHosts = new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase);
         }
 
-        /// <summary>
-        /// Start Google OAuth 2.0 authorization - redirects browser to Google consent screen.
-        /// Note: open this URL in a browser tab (Swagger "Execute" won't follow redirects).
-        /// </summary>
         [HttpGet("google/redirect")]
         [AllowAnonymous]
         public IActionResult GoogleRedirect([FromQuery] string? returnUrl)
         {
-            // Build state containing nonce + returnUrl
             var stateObj = new { nonce = Guid.NewGuid().ToString("N"), returnUrl };
             var stateJson = JsonSerializer.Serialize(stateObj);
             var state = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(stateJson));
@@ -75,19 +80,14 @@ namespace ShoppingPlatform.Controllers
             var url = QueryHelpers.AddQueryString(authUri, query!);
 
 #if DEBUG
-            // In dev return the URL for easy testing in Swagger (copy/paste)
+            // In dev returning the URL is handy for Swagger/testing.
+            // When calling from your frontend, call this endpoint, read the "url" and then set window.location.href = url
             return Ok(new { url });
 #else
-    // In production immediately redirect the browser to Google
-    return Redirect(url);
+            return Redirect(url);
 #endif
         }
 
-
-        /// <summary>
-        /// Callback endpoint Google will call with ?code=...&state=...
-        /// Exchanges the code for tokens, validates id_token, upserts user and returns app JWT.
-        /// </summary>
         [HttpGet("google/callback")]
         [AllowAnonymous]
         public async Task<IActionResult> GoogleCallback([FromQuery] string code, [FromQuery] string state)
@@ -103,7 +103,6 @@ namespace ShoppingPlatform.Controllers
             }
             catch { /* ignore decode errors for now */ }
 
-            // Exchange code for tokens (your existing code)
             using var http = new HttpClient();
             var form = new Dictionary<string, string?>
             {
@@ -141,7 +140,7 @@ namespace ShoppingPlatform.Controllers
                 return Unauthorized(new { message = "Invalid id_token", detail = ex.Message });
             }
 
-            // Upsert user (your existing logic)
+            // Upsert user
             var user = await _users.GetByEmailAsync(payload.Email);
             if (user == null)
             {
@@ -167,39 +166,35 @@ namespace ShoppingPlatform.Controllers
                 }
             }
 
-            // Issue JWT
+            // Issue JWT + refresh token
             var jwt = _jwt.GenerateToken(user);
-
-            // OPTIONAL: create refresh token and set cookie (remember dev cookie caveat below)
             var refreshDays = int.TryParse(_config["Jwt:RefreshDays"], out var rd) ? rd : 30;
             var refreshToken = _jwt.GenerateRefreshToken(refreshDays);
             refreshToken.CreatedByIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
             user.AddRefreshToken(refreshToken);
             await _users.UpdateAsync(user.Id!, user);
 
-            // Set refresh cookie — in production keep Secure = true.
+            // Cookie options - secure in production
             var cookieOptions = new Microsoft.AspNetCore.Http.CookieOptions
             {
                 HttpOnly = true,
                 Expires = refreshToken.ExpiresAt,
-                Secure = true, // NOTE: if frontend is http://localhost:3000, Secure=true prevents browser from sending the cookie in development
+                Secure = !_env.IsDevelopment(), // Secure only in non-dev
                 SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
                 Path = "/"
             };
             Response.Cookies.Append("refreshToken", refreshToken.Token, cookieOptions);
 
-            // Redirect the browser to frontend returnUrl (if whitelisted),
-            // placing token in the fragment so it isn't sent to servers.
+            // If returnUrl provided and allowed -> redirect with token in fragment
             if (!string.IsNullOrEmpty(returnUrl) && IsAllowedReturnUrl(returnUrl))
             {
-                // Example result: http://localhost:3000/home#token=<jwt>
                 var separator = returnUrl.Contains("#") ? "&" : "#";
                 var redirectUrl = $"{returnUrl}{separator}token={Uri.EscapeDataString(jwt)}";
                 return Redirect(redirectUrl);
             }
 
-            // Fallback: return JSON (API clients)
-            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName } });
+            // Otherwise return JSON (API clients / debugging)
+            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName }, attemptedReturnUrl = returnUrl, allowed = IsAllowedReturnUrl(returnUrl) });
         }
 
         private bool IsAllowedReturnUrl(string? returnUrl)
@@ -207,20 +202,21 @@ namespace ShoppingPlatform.Controllers
             if (string.IsNullOrEmpty(returnUrl)) return false;
             if (!Uri.IsWellFormedUriString(returnUrl, UriKind.Absolute)) return false;
 
-            var allowedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "yobha.in",
-        "localhost",
-        "127.0.0.1"
-        // you can add ngrok host e.g. "abcd-1234.ngrok.io"
-    };
-
             var u = new Uri(returnUrl);
-            // allow specific localhost ports (common dev pattern)
-            if (u.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
-                return u.Port == 3000; // accept only localhost:3000
 
-            return allowedHosts.Contains(u.Host);
+            // allow localhost only on port 3000 (common dev pattern)
+            if (u.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                return u.Port == 3000;
+
+            // Allow common Vercel pattern: any subdomain of vercel.app
+            if (u.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Check against configured allowed hosts (appsettings)
+            if (_allowedReturnHosts.Contains(u.Host))
+                return true;
+
+            return false;
         }
     }
 }
