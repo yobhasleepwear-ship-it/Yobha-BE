@@ -7,5 +7,6 @@
         public string? TemplateId { get; set; }    // keep for backward compatibility
         public string? TemplateName { get; set; }  // prefer this
         public string? DefaultVar1 { get; set; }
+        public bool? UseTemplate { get; set; }
     }
 }
