@@ -286,8 +286,12 @@ namespace ShoppingPlatform.Controllers
 
             try
             {
+                _logger.LogInformation("API /send-otp called for phone={phone}", MaskPhone(dto.PhoneNumber));
+
+                // Call service which will log details
                 var providerResult = await _sms.SendOtpAsync(dto.PhoneNumber);
 
+                // store entry (sessionId may be null if provider failed)
                 var entry = new OtpEntry
                 {
                     PhoneNumber = dto.PhoneNumber,
@@ -302,24 +306,40 @@ namespace ShoppingPlatform.Controllers
                 {
                     sessionId = providerResult.SessionId,
                     providerStatus = providerResult.ProviderStatus,
-                    providerMessageId = providerResult.ProviderMessageId
+                    providerMessageId = providerResult.ProviderMessageId,
+                    providerRaw = providerResult.RawResponse?.Length > 0 ? providerResult.RawResponse : null
                 };
 
                 if (!providerResult.IsSuccess)
                 {
-                    var errors = new List<string> { $"providerStatus={providerResult.ProviderStatus}", $"details={providerResult.RawResponse}" };
+                    _logger.LogWarning("Provider rejected OTP send for phone={phone} status={status} details={details}",
+                        MaskPhone(dto.PhoneNumber), providerResult.ProviderStatus, Truncate(providerResult.RawResponse, 500));
+
+                    var errors = new List<string> { $"providerStatus={providerResult.ProviderStatus}", $"details={Truncate(providerResult.RawResponse, 500)}" };
                     return StatusCode((int)System.Net.HttpStatusCode.BadGateway, ApiResponse<object>.Fail("Provider rejected SMS", errors, System.Net.HttpStatusCode.BadGateway));
                 }
 
+                _logger.LogInformation("OTP send flow completed for phone={phone} sessionId={sid}", MaskPhone(dto.PhoneNumber), providerResult.SessionId);
                 return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SendOtp failed for phone {phone}", dto?.PhoneNumber);
+                _logger.LogError(ex, "SendOtp failed for phone {phone}", MaskPhone(dto?.PhoneNumber));
                 var errors = new List<string> { ex.Message };
                 return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, ApiResponse<object>.Fail("Failed to send OTP", errors, System.Net.HttpStatusCode.InternalServerError));
             }
         }
+
+        // small helpers (place near controller class)
+        private static string MaskPhone(string? phone)
+        {
+            if (string.IsNullOrEmpty(phone)) return string.Empty;
+            var digits = System.Text.RegularExpressions.Regex.Replace(phone, @"\D", "");
+            if (digits.Length <= 4) return new string('*', digits.Length);
+            return new string('*', digits.Length - 4) + digits[^4..];
+        }
+        private static string Truncate(string? s, int maxLen) => string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= maxLen ? s : s.Substring(0, maxLen) + "...");
+
 
         // -----------------------
         // Verify OTP (using 2Factor)
