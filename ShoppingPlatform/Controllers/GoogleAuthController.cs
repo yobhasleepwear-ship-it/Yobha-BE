@@ -31,6 +31,7 @@ namespace ShoppingPlatform.Controllers
         private readonly IConfiguration _config;
         private readonly IHostEnvironment _env;
         private readonly HashSet<string> _allowedReturnHosts;
+        private readonly string? _defaultReturnUrl;
 
         public GoogleAuthController(
             UserRepository users,
@@ -51,10 +52,12 @@ namespace ShoppingPlatform.Controllers
             _env = env;
             _googleSettings = googleOptions.Value;
 
-            // Load allowed hosts from configuration (appsettings.json) if present.
-            // Example config key: "Auth:AllowedReturnHosts": [ "yobha.in", "localhost", "127.0.0.1", "yobha-test-env.vercel.app" ]
             var hosts = _config.GetSection("Auth:AllowedReturnHosts").Get<string[]>() ?? Array.Empty<string>();
             _allowedReturnHosts = new HashSet<string>(hosts, StringComparer.OrdinalIgnoreCase);
+
+            // IMPORTANT: set this in appsettings.json to your frontend home:
+            // "Auth:DefaultReturnUrl": "https://yobha-test-env.vercel.app/home"
+            _defaultReturnUrl = _config["Auth:DefaultReturnUrl"];
         }
 
         [HttpGet("google/redirect")]
@@ -80,8 +83,6 @@ namespace ShoppingPlatform.Controllers
             var url = QueryHelpers.AddQueryString(authUri, query!);
 
 #if DEBUG
-            // In dev returning the URL is handy for Swagger/testing.
-            // When calling from your frontend, call this endpoint, read the "url" and then set window.location.href = url
             return Ok(new { url });
 #else
             return Redirect(url);
@@ -179,22 +180,35 @@ namespace ShoppingPlatform.Controllers
             {
                 HttpOnly = true,
                 Expires = refreshToken.ExpiresAt,
-                Secure = !_env.IsDevelopment(), // Secure only in non-dev
+                Secure = !_env.IsDevelopment(),
                 SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict,
                 Path = "/"
             };
             Response.Cookies.Append("refreshToken", refreshToken.Token, cookieOptions);
 
-            // If returnUrl provided and allowed -> redirect with token in fragment
+            // ---------- FORCED REDIRECT (quick fix) ----------
+            // If returnUrl exists and is allowed -> redirect there.
+            // Otherwise, if DefaultReturnUrl is configured, redirect there.
+            // This ensures browser won't remain on backend JSON page.
+            string redirectTarget = null!;
             if (!string.IsNullOrEmpty(returnUrl) && IsAllowedReturnUrl(returnUrl))
             {
-                var separator = returnUrl.Contains("#") ? "&" : "#";
-                var redirectUrl = $"{returnUrl}{separator}token={Uri.EscapeDataString(jwt)}";
+                redirectTarget = returnUrl;
+            }
+            else if (!string.IsNullOrEmpty(_defaultReturnUrl))
+            {
+                redirectTarget = _defaultReturnUrl;
+            }
+
+            if (!string.IsNullOrEmpty(redirectTarget))
+            {
+                var separator = redirectTarget.Contains("#") ? "&" : "#";
+                var redirectUrl = $"{redirectTarget}{separator}token={Uri.EscapeDataString(jwt)}";
                 return Redirect(redirectUrl);
             }
 
-            // Otherwise return JSON (API clients / debugging)
-            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName }, attemptedReturnUrl = returnUrl, allowed = IsAllowedReturnUrl(returnUrl) });
+            // Fallback: if no default configured, still return JSON (rare)
+            return Ok(new { token = jwt, user = new { user.Id, user.Email, user.FullName }, attemptedReturnUrl = returnUrl, defaultReturnUrl = _defaultReturnUrl });
         }
 
         private bool IsAllowedReturnUrl(string? returnUrl)
@@ -212,7 +226,6 @@ namespace ShoppingPlatform.Controllers
             if (u.Host.EndsWith(".vercel.app", StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            // Check against configured allowed hosts (appsettings)
             if (_allowedReturnHosts.Contains(u.Host))
                 return true;
 
