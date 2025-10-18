@@ -2,15 +2,19 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Sms;
+using static System.Net.WebRequestMethods;
 
 namespace ShoppingPlatform.Services
 {
@@ -50,9 +54,13 @@ namespace ShoppingPlatform.Services
                     : fromEnvSingle ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(_apiKey))
+            {
                 _logger.LogError("TwoFactor API key not configured (checked TwoFactor:ApiKey, env vars, settings).");
+            }
             else
-                _logger.LogInformation("TwoFactor API key loaded (len={len})", _apiKey.Length);
+            {
+                _logger.LogInformation("TwoFactor API key loaded (masked={keyMasked})", MaskKey(_apiKey));
+            }
         }
 
         // Generate OTP and call 2Factor provider
@@ -60,69 +68,60 @@ namespace ShoppingPlatform.Services
         {
             if (string.IsNullOrWhiteSpace(_apiKey))
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
+
             if (string.IsNullOrWhiteSpace(phoneNumber))
                 throw new ArgumentException(nameof(phoneNumber));
 
-            // OPTION 1: Let provider generate OTP (recommended)
-            // Do NOT generate OTP here locally. Let provider generate and send SMS.
-            // If you *must* pass a variable to template, use a transient token, but DO NOT log it or return it.
+            // create an OTP (you may not persist it here; provider will send)
+            var otp = new Random().Next(100000, 999999).ToString();
 
-            // var otp = new Random().Next(100000, 999999).ToString();  <-- remove this if you want provider to AUTOGEN
+            var var1 = _cfg?.DefaultVar1 ?? "Customer";
+            var var2 = otp;
 
-            var var1 = _cfg.DefaultVar1 ?? "Customer";
-            // var2 intentionally not generated/stored/logged to avoid exposing OTP to logs or responses
-            string? var2 = null;
+            _logger.LogDebug("TwoFactor: prepare send phone={phoneMask}", MaskPhone(phoneNumber));
 
-            // use fixed template/sender as you wanted
-            var templateName = FixedTemplateName; // "SENDOTP"
-            var sender = FixedSenderId;           // "YOBHAS"
-
-            _logger.LogInformation("Preparing to send OTP; phone={phoneMask} template={template} sender={sender}",
-                MaskPhone(phoneNumber), templateName, sender);
-            var normalizedPhone = NormalizePhone(phoneNumber);
+            var normalized = NormalizePhone(phoneNumber);
+            var template = FixedTemplateName; // force the approved template
+            var sender = FixedSenderId;       // force the approved sender
 
             var form = new List<KeyValuePair<string, string>>
-    {
-        new KeyValuePair<string, string>("From", sender),
-        new KeyValuePair<string, string>("To", normalizedPhone),
-        // Do NOT send VAR2 if you don't want to provide the OTP value yourself.
-        new KeyValuePair<string, string>("TemplateName", templateName),
-    };
+            {
+                new KeyValuePair<string, string>("From", sender),
+                new KeyValuePair<string, string>("To", normalized),
+                new KeyValuePair<string, string>("TemplateName", template),
+                new KeyValuePair<string, string>("VAR1", var1),
+                new KeyValuePair<string, string>("VAR2", var2)
+            };
 
-            if (!string.IsNullOrWhiteSpace(var1)) form.Add(new KeyValuePair<string, string>("VAR1", var1));
-            // if you must pass VAR2 (provider expects it) then set it here but DO NOT log or return it.
+            var url = $"https://2factor.in/API/V1/{_apiKey}/SMS/{normalized}/AUTOGEN/{sender}";
 
-            var url = $"https://2factor.in/API/V1/{_apiKey}/SMS/{normalizedPhone}/AUTOGEN/{sender}";
+            _logger.LogInformation("TwoFactor POST -> urlMask={urlMask} phone={phoneMask} template={template} sender={sender}",
+                MaskKey(url), MaskPhone(phoneNumber), template, sender);
 
-            _logger.LogDebug("TwoFactor: sending POST to {urlMasked} with keys={keys}",
-                MaskKey(url, 16), string.Join(',', form.Select(f => f.Key)));
-
-            var http = _httpFactory.CreateClient("TwoFactorClient");
             var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new FormUrlEncodedContent(form)
             };
-            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             HttpResponseMessage resp;
             string body;
             try
             {
-                resp = await http.SendAsync(request);
+                var client = _httpFactory.CreateClient();
+                resp = await client.SendAsync(request);
                 body = await resp.Content.ReadAsStringAsync();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "TwoFactor: HTTP request failed for phone={phoneMask}", MaskPhone(phoneNumber));
+                _logger.LogError(ex, "TwoFactor HTTP call failed for phone={phoneMask}", MaskPhone(phoneNumber));
                 return new ProviderResult { IsSuccess = false, ProviderStatus = "HTTP_ERROR", RawResponse = ex.Message };
             }
 
-            _logger.LogInformation("TwoFactor response: httpStatus={status} phone={phoneMask} bodyLen={len}",
-                (int)resp.StatusCode, MaskPhone(phoneNumber), body?.Length ?? 0);
-            // keep debug body but avoid logging sensitive 6-digit OTP in Info level
-            _logger.LogDebug("TwoFactor response body (truncated): {body}", Truncate(body, 1000));
+            _logger.LogInformation("TwoFactor HTTP response status={status} phone={phoneMask} bodyLen={len}", (int)resp.StatusCode, MaskPhone(phoneNumber), body?.Length ?? 0);
+            _logger.LogDebug("TwoFactor body: {body}", Truncate(body, 2000));
 
-            var result = new ProviderResult { RawResponse = body ?? string.Empty };
+            var result = new ProviderResult { RawResponse = body ?? "" };
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -131,36 +130,34 @@ namespace ShoppingPlatform.Services
                 return result;
             }
 
-            // parse response (sessionId, status)
             try
             {
-                using var doc = JsonDocument.Parse(string.IsNullOrEmpty(body) ? "{}" : body);
-                var root = doc.RootElement;
-                string status = root.TryGetProperty("Status", out var st) ? st.GetString() ?? "" : (root.TryGetProperty("status", out var st2) ? st2.GetString() ?? "" : "");
-                string details = root.TryGetProperty("Details", out var d) ? d.GetString() ?? "" : (root.TryGetProperty("details", out var d2) ? d2.GetString() ?? "" : "");
+                var parsed = JsonConvert.DeserializeObject<JObject?>(body ?? "{}");
+                var status = parsed?["Status"]?.ToString() ?? parsed?["status"]?.ToString() ?? "";
+                var details = parsed?["Details"]?.ToString() ?? parsed?["details"]?.ToString() ?? "";
 
                 result.ProviderStatus = status;
                 result.SessionId = details;
-                result.ProviderMessageId = root.TryGetProperty("MessageId", out var mid) ? mid.GetString() : null;
-                result.IsSuccess = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase) || string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase);
+                result.ProviderMessageId = parsed?["MessageId"]?.ToString() ?? "";
+
+                result.IsSuccess = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(status, "Accepted", StringComparison.OrdinalIgnoreCase);
 
                 if (result.IsSuccess)
-                    _logger.LogInformation("TwoFactor accepted OTP send. sessionId={sid} phone={phoneMask}", result.SessionId, MaskPhone(phoneNumber));
+                    _logger.LogInformation("TwoFactor accepted; session={sid} phone={phoneMask}", result.SessionId, MaskPhone(phoneNumber));
                 else
-                    _logger.LogWarning("TwoFactor returned non-success status={status} details={details}", status, Truncate(details, 200));
+                    _logger.LogWarning("TwoFactor not-accepted; status={status} details={details}", status, Truncate(details, 500));
 
                 return result;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "TwoFactor: failed to parse provider response body");
+                _logger.LogError(ex, "TwoFactor: parse error");
                 result.IsSuccess = false;
                 result.ProviderStatus = "PARSE_ERROR";
                 return result;
             }
         }
-        static string NormalizePhone(string phone) { var digits = Regex.Replace(phone ?? string.Empty, @"\D", ""); if (digits.Length == 10) return "91" + digits; if (digits.Length == 11 && digits.StartsWith("0")) return "91" + digits.Substring(1); if (digits.StartsWith("91") && digits.Length >= 12) return digits; return digits; }
-
 
         public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
         {
@@ -188,6 +185,15 @@ namespace ShoppingPlatform.Services
             if (string.IsNullOrEmpty(s)) return string.Empty;
             if (s.Length <= showRight) return new string('*', s.Length);
             return new string('*', s.Length - showRight) + s[^showRight..];
+        }
+
+        private static string NormalizePhone(string phone)
+        {
+            var digits = Regex.Replace(phone ?? string.Empty, @"\D", "");
+            if (digits.Length == 10) return "91" + digits;
+            if (digits.Length == 11 && digits.StartsWith("0")) return "91" + digits.Substring(1);
+            if (digits.StartsWith("91") && digits.Length >= 12) return digits;
+            return digits;
         }
     }
 }

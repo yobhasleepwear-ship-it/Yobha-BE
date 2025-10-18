@@ -15,6 +15,7 @@ using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -280,18 +281,19 @@ namespace ShoppingPlatform.Controllers
         {
             if (dto == null || string.IsNullOrWhiteSpace(dto.PhoneNumber))
             {
-                var errors = new List<string> { "phoneNumber is required" };
-                return BadRequest(ApiResponse<object>.Fail("Invalid request", errors, System.Net.HttpStatusCode.BadRequest));
+                return BadRequest(ApiResponse<object>.Fail(
+                    "Invalid request",
+                    new List<string> { "phoneNumber is required" },
+                    HttpStatusCode.BadRequest));
             }
+
+            _logger.LogInformation("API /send-otp called for phone={phoneMask}", MaskPhone(dto.PhoneNumber));
 
             try
             {
-                _logger.LogInformation("API /send-otp called for phone={phone}", MaskPhone(dto.PhoneNumber));
-
-                // Call service which will log details
                 var providerResult = await _sms.SendOtpAsync(dto.PhoneNumber);
 
-                // store entry (sessionId may be null if provider failed)
+                // persist entry
                 var entry = new OtpEntry
                 {
                     PhoneNumber = dto.PhoneNumber,
@@ -299,46 +301,57 @@ namespace ShoppingPlatform.Controllers
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
                 };
-
                 await _otps.CreateAsync(entry);
+
+                _logger.LogInformation("SendOtp result for phone={phoneMask} success={ok} status={status} session={sid}",
+                    MaskPhone(dto.PhoneNumber), providerResult.IsSuccess, providerResult.ProviderStatus, providerResult.SessionId);
 
                 var data = new
                 {
                     sessionId = providerResult.SessionId,
                     providerStatus = providerResult.ProviderStatus,
                     providerMessageId = providerResult.ProviderMessageId,
-                    providerRaw = providerResult.RawResponse?.Length > 0 ? providerResult.RawResponse : null
+                    providerRaw = providerResult.RawResponse
                 };
 
                 if (!providerResult.IsSuccess)
                 {
-                    _logger.LogWarning("Provider rejected OTP send for phone={phone} status={status} details={details}",
-                        MaskPhone(dto.PhoneNumber), providerResult.ProviderStatus, Truncate(providerResult.RawResponse, 500));
+                    _logger.LogWarning("Provider rejected SMS for {phoneMask} status={status} raw={raw}",
+                        MaskPhone(dto.PhoneNumber),
+                        providerResult.ProviderStatus,
+                        Truncate(providerResult.RawResponse, 1000));
 
-                    var errors = new List<string> { $"providerStatus={providerResult.ProviderStatus}", $"details={Truncate(providerResult.RawResponse, 500)}" };
-                    return StatusCode((int)System.Net.HttpStatusCode.BadGateway, ApiResponse<object>.Fail("Provider rejected SMS", errors, System.Net.HttpStatusCode.BadGateway));
+                    return StatusCode((int)HttpStatusCode.BadGateway, ApiResponse<object>.Fail(
+                        "Provider rejected SMS",
+                        new List<string> {
+                    providerResult.ProviderStatus,
+                    Truncate(providerResult.RawResponse, 1000)
+                        },
+                        HttpStatusCode.BadGateway));
                 }
 
-                _logger.LogInformation("OTP send flow completed for phone={phone} sessionId={sid}", MaskPhone(dto.PhoneNumber), providerResult.SessionId);
                 return Ok(ApiResponse<object>.Ok(data, "OTP sent successfully"));
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SendOtp failed for phone {phone}", MaskPhone(dto?.PhoneNumber));
-                var errors = new List<string> { ex.Message };
-                return StatusCode((int)System.Net.HttpStatusCode.InternalServerError, ApiResponse<object>.Fail("Failed to send OTP", errors, System.Net.HttpStatusCode.InternalServerError));
+                _logger.LogError(ex, "SendOtp failed for phone {phoneMask}", MaskPhone(dto?.PhoneNumber));
+
+                return StatusCode((int)HttpStatusCode.InternalServerError, ApiResponse<object>.Fail(
+                    "Failed to send OTP",
+                    new List<string> { ex.Message },
+                    HttpStatusCode.InternalServerError));
             }
         }
 
-        // small helpers (place near controller class)
         private static string MaskPhone(string? phone)
         {
             if (string.IsNullOrEmpty(phone)) return string.Empty;
-            var digits = System.Text.RegularExpressions.Regex.Replace(phone, @"\D", "");
-            if (digits.Length <= 4) return new string('*', digits.Length);
-            return new string('*', digits.Length - 4) + digits[^4..];
+            var digits = Regex.Replace(phone, @"\D", "");
+            return digits.Length <= 4 ? new string('*', digits.Length) : new string('*', digits.Length - 4) + digits[^4..];
         }
-        private static string Truncate(string? s, int maxLen) => string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= maxLen ? s : s.Substring(0, maxLen) + "...");
+
+        private static string Truncate(string? s, int n) =>
+            string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= n ? s : s.Substring(0, n) + "...");
 
 
         // -----------------------
