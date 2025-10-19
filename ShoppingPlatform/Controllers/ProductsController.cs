@@ -37,34 +37,54 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         [HttpGet]
         [AllowAnonymous]
-        public async Task<ActionResult<ApiResponse<PagedResult<ProductListItemDto>>>> Query(
-            [FromQuery] string? q,
-            [FromQuery] string? category,
-            [FromQuery] string? subCategory,
-            [FromQuery] decimal? minPrice = null,
-            [FromQuery] decimal? maxPrice = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 20,
-            [FromQuery] string? sort = "latest",
-            [FromQuery] string? country = null // optional filter (controller-level only)
-        )
+        public async Task<IActionResult> Query(
+    [FromQuery] string? q,
+    [FromQuery] string? category,
+    [FromQuery] string? subCategory,
+    [FromQuery] decimal? minPrice = null,
+    [FromQuery] decimal? maxPrice = null,
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 20,
+    [FromQuery] string? sort = "latest",
+    [FromQuery] string? country = null
+)
         {
-            if (page <= 0) page = 1;
-            if (pageSize <= 0) pageSize = 20;
-
-            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, page, pageSize, sort);
-
-            var paged = new PagedResult<ProductListItemDto>
+            try
             {
-                Page = page,
-                PageSize = pageSize,
-                TotalCount = total,
-                Items = items
-            };
+                // cap for safety
+                const int MaxPageSize = 100;
+                if (page <= 0) page = 1;
+                if (pageSize <= 0) pageSize = 20;
+                if (pageSize > MaxPageSize) pageSize = MaxPageSize;
 
-            var response = ApiResponse<PagedResult<ProductListItemDto>>.Ok(paged, "OK");
-            return Ok(response);
+                var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, page, pageSize, sort);
+
+                var paged = new PagedResult<ProductListItemDto>
+                {
+                    Page = page,
+                    PageSize = pageSize,
+                    TotalCount = total,
+                    Items = items
+                };
+
+                return Ok(ApiResponse<PagedResult<ProductListItemDto>>.Ok(paged, "OK"));
+            }
+            catch (Exception ex)
+            {
+                // log server-side
+                //_logger?.LogError(ex, "Products.Query failed");
+
+                // return exception details for debugging (remove after you fix)
+                return StatusCode(StatusCodes.Status500InternalServerError, new
+                {
+                    error = ex.Message,
+                    exceptionType = ex.GetType().FullName,
+                    stackTrace = ex.StackTrace,
+                    inner = ex.InnerException?.Message
+                });
+            }
         }
+
 
         // -------------------------------------------
         // GET: api/products/{id}
