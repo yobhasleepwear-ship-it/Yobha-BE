@@ -23,56 +23,44 @@ namespace ShoppingPlatform.Repositories
         // -----------------------
         // QueryAsync
         // -----------------------
-        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(
-     string? q, string? category, string? subCategory,
-     decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
+        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category, string? subCategory,
+            decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
         {
-            if (page <= 0) page = 1;
-            if (pageSize <= 0) pageSize = 20;
-            const int MaxPageSize = 100;
-            if (pageSize > MaxPageSize) pageSize = MaxPageSize;
-
             var filters = new List<FilterDefinition<Product>>();
             var builder = Builders<Product>.Filter;
 
+            // Only active and not deleted by default
             filters.Add(builder.Eq(p => p.IsActive, true));
             filters.Add(builder.Eq(p => p.IsDeleted, false));
 
             if (!string.IsNullOrWhiteSpace(q))
             {
-                var escaped = Regex.Escape(q.Trim());
-                var regex = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-                filters.Add(builder.Or(
-                    builder.Regex(p => p.Name, regex),
-                    builder.Regex(p => p.Description, regex),
-                    builder.Regex(p => p.Slug, regex)
-                ));
+                var qLower = q.Trim();
+                var nameFilter = builder.Regex(p => p.Name, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                var descFilter = builder.Regex(p => p.Description, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                var slugFilter = builder.Regex(p => p.Slug, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                filters.Add(builder.Or(nameFilter, descFilter, slugFilter));
             }
 
             if (!string.IsNullOrWhiteSpace(category))
             {
-                var cat = Regex.Escape(category.Trim());
-                var catRegex = new MongoDB.Bson.BsonRegularExpression($"^{cat}$", "i");
-                filters.Add(builder.Or(
-                    builder.Regex(p => p.ProductCategory, catRegex),
-                    builder.Regex(p => p.ProductSubCategory, catRegex),
-                    builder.Regex(p => p.ProductMainCategory, catRegex)
-                ));
+                var cat = category.Trim();
+                var catFilter = builder.Or(
+                    builder.Eq(p => p.ProductCategory, cat),
+                    builder.Eq(p => p.ProductSubCategory, cat),
+                    builder.Eq(p => p.ProductMainCategory, cat)
+                );
+                filters.Add(catFilter);
             }
 
             if (!string.IsNullOrWhiteSpace(subCategory))
             {
-                var subCat = Regex.Escape(subCategory.Trim());
-                var subCatRegex = new MongoDB.Bson.BsonRegularExpression($"^{subCat}$", "i");
-                filters.Add(builder.Regex(p => p.ProductSubCategory, subCatRegex));
+                var subCat = subCategory.Trim();
+                var subCatFilter = builder.Eq(p => p.ProductCategory, subCat);
+                filters.Add(subCatFilter);
             }
 
-            if (minPrice.HasValue) filters.Add(builder.Gte(p => p.Price, minPrice.Value));
-            if (maxPrice.HasValue) filters.Add(builder.Lte(p => p.Price, maxPrice.Value));
-
             var combinedFilter = filters.Count > 0 ? builder.And(filters) : builder.Empty;
-
-            //_logger?.LogDebug("Products.Query combinedFilter={filter}", combinedFilter.ToJson());
 
             var total = await _collection.CountDocumentsAsync(combinedFilter);
 
@@ -86,29 +74,28 @@ namespace ShoppingPlatform.Repositories
             };
 
             var skip = (page - 1) * pageSize;
-
             var productsCursor = await _collection.Find(combinedFilter)
                 .Sort(sortDef)
                 .Skip(skip)
                 .Limit(pageSize)
                 .ToListAsync();
 
-            var mapped = new List<ProductListItemDto>();
-            foreach (var p in productsCursor)
+            var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+
+            if (minPrice.HasValue || maxPrice.HasValue)
             {
-                try
+                mapped = mapped.Where(item =>
                 {
-                    var dto = ProductMappings.ToListItemDto(p);
-                    if (dto != null) mapped.Add(dto);
-                }
-                catch (Exception ex)
-                {
-                   // _logger?.LogError(ex, "Failed mapping product {id}", p?.ProductId ?? p?._id?.ToString());
-                }
+                    var price = item.Price;
+                    if (minPrice.HasValue && price < minPrice.Value) return false;
+                    if (maxPrice.HasValue && price > maxPrice.Value) return false;
+                    return true;
+                }).ToList();
             }
 
             return (mapped, total);
         }
+
 
 
         // -----------------------
@@ -476,6 +463,8 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> DecrementStockAsync(string productObjectId, string size, string currency, int quantity)
         {
+            if (quantity <= 0) throw new ArgumentException("quantity must be > 0", nameof(quantity));
+
             var filter = Builders<Product>.Filter.And(
                 Builders<Product>.Filter.Eq(p => p.Id, productObjectId),
                 Builders<Product>.Filter.ElemMatch(p => p.PriceList,
@@ -483,17 +472,16 @@ namespace ShoppingPlatform.Repositories
             );
 
             var update = Builders<Product>.Update
-                .Inc("PriceList.$.Stock", -quantity);
+                .Inc("PriceList.$.Quantity", -quantity); // <-- update Quantity, not Stock
 
             var result = await _collection.UpdateOneAsync(filter, update);
             return result.ModifiedCount > 0;
         }
 
-        /// <summary>
-        /// Increments stock quantity (rollback or restock).
-        /// </summary>
         public async Task IncrementStockAsync(string productObjectId, string size, string currency, int quantity)
         {
+            if (quantity <= 0) throw new ArgumentException("quantity must be > 0", nameof(quantity));
+
             var filter = Builders<Product>.Filter.And(
                 Builders<Product>.Filter.Eq(p => p.Id, productObjectId),
                 Builders<Product>.Filter.ElemMatch(p => p.PriceList,
@@ -503,7 +491,8 @@ namespace ShoppingPlatform.Repositories
             var update = Builders<Product>.Update
                 .Inc("PriceList.$.Quantity", quantity);
 
-            await _collection.UpdateOneAsync(filter, update);
+            var result = await _collection.UpdateOneAsync(filter, update);
+            // optionally verify ModifiedCount and log if zero (no matching price entry)
         }
     }
 }
