@@ -221,5 +221,6 @@ namespace ShoppingPlatform.Models
         public string Zip { get; set; } = null!;
         public string Country { get; set; } = null!;
         public bool IsDefault { get; set; } = false;
+        public string MobileNumner { get; set; } = null!;
     }
 }

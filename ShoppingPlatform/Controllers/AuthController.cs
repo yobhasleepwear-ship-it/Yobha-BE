@@ -716,7 +716,8 @@ namespace ShoppingPlatform.Controllers
                 State = dto.State,
                 Zip = dto.Zip,
                 Country = dto.Country,
-                IsDefault = dto.IsDefault
+                IsDefault = dto.IsDefault,
+                MobileNumner = dto.MobileNumnber
             };
 
             await _users.AddAddressAsync(uid, address);
@@ -746,7 +747,8 @@ namespace ShoppingPlatform.Controllers
                 State = dto.State,
                 Zip = dto.Zip,
                 Country = dto.Country,
-                IsDefault = dto.IsDefault
+                IsDefault = dto.IsDefault,
+                MobileNumner = dto.MobileNumnber
             };
 
             var updated = await _users.UpdateAddressAsync(uid, address);

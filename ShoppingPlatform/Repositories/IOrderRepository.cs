@@ -1,4 +1,5 @@
 ﻿using ShoppingPlatform.Dto;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -22,6 +23,7 @@ namespace ShoppingPlatform.Repositories
 
         Task<long> GetUserOrderCountAsync(string userId);
 
+        Task<Order> CreateOrderAsync(CreateOrderRequestV2 req, string userId);
 
     }
 }

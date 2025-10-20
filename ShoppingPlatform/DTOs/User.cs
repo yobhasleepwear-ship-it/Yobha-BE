@@ -11,6 +11,7 @@
         public string Zip { get; set; } = null!;
         public string Country { get; set; } = null!;
         public bool IsDefault { get; set; } = false;
+        public string MobileNumnber { get; set; } = null!;
     }
 
     public class UpdateAddressDto
@@ -23,6 +24,8 @@
         public string Zip { get; set; } = null!;
         public string Country { get; set; } = null!;
         public bool IsDefault { get; set; } = false;
+        public string MobileNumnber { get; set; } = null!;
+
     }
 
     public class UpdateNameDto

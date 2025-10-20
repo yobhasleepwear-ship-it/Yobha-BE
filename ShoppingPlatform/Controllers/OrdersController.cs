@@ -13,6 +13,7 @@ using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Services; // for IRazorpayService and ICouponService
 using ShoppingPlatform.Helpers;
+using System.Security.Claims;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -85,235 +86,234 @@ namespace ShoppingPlatform.Controllers
         // POST: api/orders
         // Automatically builds the order from the user’s cart.
         // -------------------------------------------
-        [HttpPost]
-        [Authorize]
-        public async Task<ActionResult<ApiResponse<object>>> Create([FromBody] CreateOrderRequest? request)
-        {
-            var userId = User.GetUserIdOrAnonymous();
+        //[HttpPost]
+        //[Authorize]
+        //public async Task<ActionResult<ApiResponse<object>>> Create([FromBody] CreateOrderRequest? request)
+        //{
+        //    var userId = User.GetUserIdOrAnonymous();
 
-            // 1️⃣ Get user's cart
-            var cartItems = await _cartRepo.GetForUserAsync(userId);
-            if (cartItems == null || !cartItems.Any())
-                return BadRequest(ApiResponse<object>.Fail("Cart is empty", null, HttpStatusCode.BadRequest));
+        //    // 1️⃣ Get user's cart
+        //    var cartItems = await _cartRepo.GetForUserAsync(userId);
+        //    if (cartItems == null || !cartItems.Any())
+        //        return BadRequest(ApiResponse<object>.Fail("Cart is empty", null, HttpStatusCode.BadRequest));
 
-            var orderItems = new List<OrderItem>();
-            decimal subTotal = 0m;
-            const string defaultCurrency = "INR";
+        //    var orderItems = new List<OrderItem>();
+        //    decimal subTotal = 0m;
+        //    const string defaultCurrency = "INR";
 
-            // 2️⃣ Build order items + subtotal
-            foreach (var cart in cartItems)
-            {
-                var product = await _productRepo.GetByIdAsync(cart.ProductObjectId);
-                if (product == null)
-                    return BadRequest(ApiResponse<object>.Fail($"Product not found: {cart.ProductId}", null, HttpStatusCode.BadRequest));
+        //    // 2️⃣ Build order items + subtotal
+        //    foreach (var cart in cartItems)
+        //    {
+        //        var product = await _productRepo.GetByIdAsync(cart.ProductObjectId);
+        //        if (product == null)
+        //            return BadRequest(ApiResponse<object>.Fail($"Product not found: {cart.ProductId}", null, HttpStatusCode.BadRequest));
 
-                // Find matching PriceList entry (size + currency)
-                var priceEntry = product.PriceList?.FirstOrDefault(p =>
-                    p.Size.Equals(cart.VariantSku, StringComparison.OrdinalIgnoreCase) &&
-                    p.Currency.Equals(cart.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
+        //        // Find matching PriceList entry (size + currency)
+        //        var priceEntry = product.PriceList?.FirstOrDefault(p =>
+        //            p.Size.Equals(cart.VariantSku, StringComparison.OrdinalIgnoreCase) &&
+        //            p.Currency.Equals(cart.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
 
-                if (priceEntry == null)
-                    return BadRequest(ApiResponse<object>.Fail($"Size '{cart.VariantSku}' not found for {cart.ProductName}.", null, HttpStatusCode.BadRequest));
+        //        if (priceEntry == null)
+        //            return BadRequest(ApiResponse<object>.Fail($"Size '{cart.VariantSku}' not found for {cart.ProductName}.", null, HttpStatusCode.BadRequest));
 
-                if (priceEntry.Quantity < cart.Quantity)
-                    return BadRequest(ApiResponse<object>.Fail($"Insufficient stock for {cart.ProductName} ({cart.VariantSku})", null, HttpStatusCode.BadRequest));
+        //        if (priceEntry.Quantity < cart.Quantity)
+        //            return BadRequest(ApiResponse<object>.Fail($"Insufficient stock for {cart.ProductName} ({cart.VariantSku})", null, HttpStatusCode.BadRequest));
 
-                // Determine base price
-                var unitPrice = priceEntry.PriceAmount;
+        //        // Determine base price
+        //        var unitPrice = priceEntry.PriceAmount;
 
-                // Determine shipping cost using CountryPrices (if applicable)
-                decimal shippingPrice = 0m;
-                if (product.CountryPrices?.Any() == true)
-                {
-                    var matchedCountry = product.CountryPrices.FirstOrDefault(cp =>
-                        cp.Currency.Equals(cart.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
+        //        // Determine shipping cost using CountryPrices (if applicable)
+        //        decimal shippingPrice = 0m;
+        //        if (product.CountryPrices?.Any() == true)
+        //        {
+        //            var matchedCountry = product.CountryPrices.FirstOrDefault(cp =>
+        //                cp.Currency.Equals(cart.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
 
-                    if (matchedCountry != null)
-                        shippingPrice = matchedCountry.PriceAmount;
-                }
+        //            if (matchedCountry != null)
+        //                shippingPrice = matchedCountry.PriceAmount;
+        //        }
 
-                // Calculate totals
-                var lineTotal = Math.Round(unitPrice * cart.Quantity, 2);
+        //        // Calculate totals
+        //        var lineTotal = Math.Round(unitPrice * cart.Quantity, 2);
 
-                orderItems.Add(new OrderItem
-                {
-                    ProductId = cart.ProductId,
-                    ProductObjectId = cart.ProductObjectId,
-                    ProductName = cart.ProductName,
-                    VariantSku = cart.VariantSku, // keep as Size for compatibility
-                    Quantity = cart.Quantity,
-                    UnitPrice = unitPrice,
-                    LineTotal = lineTotal,
-                    Currency = cart.Currency ?? defaultCurrency,
-                    ThumbnailUrl = cart.Snapshot?.ThumbnailUrl,
-                    Slug = cart.Snapshot?.Slug
-                });
+        //        orderItems.Add(new OrderItem
+        //        {
+        //            ProductId = cart.ProductId,
+        //            ProductObjectId = cart.ProductObjectId,
+        //            ProductName = cart.ProductName,
+        //            Quantity = cart.Quantity,
+        //            UnitPrice = unitPrice,
+        //            LineTotal = lineTotal,
+        //            Currency = cart.Currency ?? defaultCurrency,
+        //            ThumbnailUrl = cart.Snapshot?.ThumbnailUrl,
+        //            Slug = cart.Snapshot?.Slug
+        //        });
 
-                subTotal += lineTotal;
-            }
+        //        subTotal += lineTotal;
+        //    }
 
-            // 3️⃣ Shipping & Tax
-            // Aggregate shipping cost (sum of individual shipping if any)
-            decimal shipping = orderItems.Sum(i => i.Currency == "INR" ? 0 : 0); // default zero, can customize later
+        //    // 3️⃣ Shipping & Tax
+        //    // Aggregate shipping cost (sum of individual shipping if any)
+        //    decimal shipping = orderItems.Sum(i => i.Currency == "INR" ? 0 : 0); // default zero, can customize later
 
-            // If using CountryPrices for shipping:
-            if (cartItems.Any())
-            {
-                var shippingByCurrency = cartItems.Select(c =>
-                {
-                    var product = _productRepo.GetByIdAsync(c.ProductObjectId).Result;
-                    var matchedCountry = product?.CountryPrices?.FirstOrDefault(cp =>
-                        cp.Currency.Equals(c.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
-                    return matchedCountry?.PriceAmount ?? 0m;
-                }).ToList();
+        //    // If using CountryPrices for shipping:
+        //    if (cartItems.Any())
+        //    {
+        //        var shippingByCurrency = cartItems.Select(c =>
+        //        {
+        //            var product = _productRepo.GetByIdAsync(c.ProductObjectId).Result;
+        //            var matchedCountry = product?.CountryPrices?.FirstOrDefault(cp =>
+        //                cp.Currency.Equals(c.Currency ?? defaultCurrency, StringComparison.OrdinalIgnoreCase));
+        //            return matchedCountry?.PriceAmount ?? 0m;
+        //        }).ToList();
 
-                shipping = shippingByCurrency.Sum();
-            }
+        //        shipping = shippingByCurrency.Sum();
+        //    }
 
-            decimal tax = 0m;
+        //    decimal tax = 0m;
 
-            // 4️⃣ Coupon validation
-            decimal couponDiscount = 0m;
-            string? appliedCouponId = null;
-            string? appliedCouponCode = null;
-            CouponValidationResult? couponPreview = null;
+        //    // 4️⃣ Coupon validation
+        //    decimal couponDiscount = 0m;
+        //    string? appliedCouponId = null;
+        //    string? appliedCouponCode = null;
+        //    CouponValidationResult? couponPreview = null;
 
-            if (!string.IsNullOrWhiteSpace(request?.CouponCode))
-            {
-                couponPreview = await _couponService.ValidateOnlyAsync(request.CouponCode.Trim(), userId, subTotal);
-                if (!couponPreview.IsValid)
-                    return BadRequest(ApiResponse<object>.Fail(couponPreview.ErrorMessage, null, HttpStatusCode.BadRequest));
+        //    if (!string.IsNullOrWhiteSpace(request?.CouponCode))
+        //    {
+        //        couponPreview = await _couponService.ValidateOnlyAsync(request.CouponCode.Trim(), userId, subTotal);
+        //        if (!couponPreview.IsValid)
+        //            return BadRequest(ApiResponse<object>.Fail(couponPreview.ErrorMessage, null, HttpStatusCode.BadRequest));
 
-                couponDiscount = Math.Round(couponPreview.DiscountAmount, 2);
-                appliedCouponId = couponPreview.Coupon?.Id;
-                appliedCouponCode = couponPreview.Coupon?.Code;
-            }
+        //        couponDiscount = Math.Round(couponPreview.DiscountAmount, 2);
+        //        appliedCouponId = couponPreview.Coupon?.Id;
+        //        appliedCouponCode = couponPreview.Coupon?.Code;
+        //    }
 
-            // 5️⃣ Loyalty discount
-            decimal loyaltyDiscountAmount = request?.LoyaltyDiscountAmount ?? 0m;
+        //    // 5️⃣ Loyalty discount
+        //    decimal loyaltyDiscountAmount = request?.LoyaltyDiscountAmount ?? 0m;
 
-            // 6️⃣ Compute totals
-            decimal discount = couponDiscount + loyaltyDiscountAmount;
-            var grandTotal = Math.Round(subTotal + shipping + tax - discount, 2, MidpointRounding.AwayFromZero);
-            if (grandTotal < 0) grandTotal = 0m;
+        //    // 6️⃣ Compute totals
+        //    decimal discount = couponDiscount + loyaltyDiscountAmount;
+        //    var grandTotal = Math.Round(subTotal + shipping + tax - discount, 2, MidpointRounding.AwayFromZero);
+        //    if (grandTotal < 0) grandTotal = 0m;
 
-            // 7️⃣ Build order
-            var order = new Order
-            {
-                UserId = userId,
-                Items = orderItems,
-                SubTotal = subTotal,
-                Shipping = shipping,
-                Tax = tax,
-                Discount = discount,
-                Total = grandTotal,
-                Currency = defaultCurrency,
-                Status = "Pending",
-                PaymentMethod = request?.PaymentMethod ?? "COD",
-                PaymentStatus = "Pending",
-                CouponCode = appliedCouponCode,
-                CouponId = appliedCouponId,
-                CouponAppliedAt = appliedCouponId != null ? DateTime.UtcNow : null,
-                CouponUsageRecorded = false,
-                LoyaltyDiscountAmount = loyaltyDiscountAmount,
-                CreatedAt = DateTime.UtcNow,
-                ShippingAddress = request?.ShippingAddress
-            };
+        //    // 7️⃣ Build order
+        //    var order = new Order
+        //    {
+        //        UserId = userId,
+        //        Items = orderItems,
+        //        SubTotal = subTotal,
+        //        Shipping = shipping,
+        //        Tax = tax,
+        //        Discount = discount,
+        //        Total = grandTotal,
+        //        Currency = defaultCurrency,
+        //        Status = "Pending",
+        //        PaymentMethod = request?.PaymentMethod ?? "COD",
+        //        PaymentStatus = "Pending",
+        //        CouponCode = appliedCouponCode,
+        //        CouponId = appliedCouponId,
+        //        CouponAppliedAt = appliedCouponId != null ? DateTime.UtcNow : null,
+        //        CouponUsageRecorded = false,
+        //        LoyaltyDiscountAmount = loyaltyDiscountAmount,
+        //        CreatedAt = DateTime.UtcNow,
+        //        ShippingAddress = request?.ShippingAddress
+        //    };
 
-            try
-            {
-                // 8️⃣ Save initial order
-                var created = await _orderRepo.CreateAsync(order);
+        //    try
+        //    {
+        //        // 8️⃣ Save initial order
+        //        var created = await _orderRepo.CreateAsync(order);
 
-                // 9️⃣ Decrement stock
-                var decremented = new List<(string productObjectId, string size, int qty, string currency)>();
-                try
-                {
-                    foreach (var item in created.Items)
-                    {
-                        var ok = await _productRepo.DecrementStockAsync(item.ProductObjectId, item.VariantSku, item.Currency, item.Quantity);
-                        if (!ok)
-                            throw new InvalidOperationException($"Failed to reserve stock for {item.ProductName} ({item.VariantSku})");
+        //        // 9️⃣ Decrement stock
+        //        var decremented = new List<(string productObjectId, string size, int qty, string currency)>();
+        //        try
+        //        {
+        //            foreach (var item in created.Items)
+        //            {
+        //                var ok = await _productRepo.DecrementStockAsync(item.ProductObjectId, item.VariantSku, item.Currency, item.Quantity);
+        //                if (!ok)
+        //                    throw new InvalidOperationException($"Failed to reserve stock for {item.ProductName} ({item.VariantSku})");
 
-                        decremented.Add((item.ProductObjectId, item.VariantSku, item.Quantity, item.Currency));
-                    }
-                }
-                catch (Exception stockEx)
-                {
-                    foreach (var d in decremented)
-                        try { await _productRepo.IncrementStockAsync(d.productObjectId, d.size, d.currency, d.qty); } catch { }
+        //                decremented.Add((item.ProductObjectId, item.VariantSku, item.Quantity, item.Currency));
+        //            }
+        //        }
+        //        catch (Exception stockEx)
+        //        {
+        //            foreach (var d in decremented)
+        //                try { await _productRepo.IncrementStockAsync(d.productObjectId, d.size, d.currency, d.qty); } catch { }
 
-                    await _orderRepo.DeleteAsync(created.Id);
-                    _logger.LogWarning(stockEx, "Stock reservation failed for order {OrderId}", created.Id);
-                    return BadRequest(ApiResponse<object>.Fail("Failed to reserve stock.", null, HttpStatusCode.BadRequest));
-                }
+        //            await _orderRepo.DeleteAsync(created.Id);
+        //            _logger.LogWarning(stockEx, "Stock reservation failed for order {OrderId}", created.Id);
+        //            return BadRequest(ApiResponse<object>.Fail("Failed to reserve stock.", null, HttpStatusCode.BadRequest));
+        //        }
 
-                // 🔟 Coupon + Loyalty logic (same as before)
-                if (!string.IsNullOrWhiteSpace(appliedCouponCode))
-                {
-                    var claim = await _couponService.TryClaimAndRecordAsync(appliedCouponCode!, userId, created.Id, couponDiscount);
-                    if (!claim.Success)
-                    {
-                        foreach (var d in decremented)
-                            try { await _productRepo.IncrementStockAsync(d.productObjectId, d.size, d.currency, d.qty); } catch { }
+        //        // 🔟 Coupon + Loyalty logic (same as before)
+        //        if (!string.IsNullOrWhiteSpace(appliedCouponCode))
+        //        {
+        //            var claim = await _couponService.TryClaimAndRecordAsync(appliedCouponCode!, userId, created.Id, couponDiscount);
+        //            if (!claim.Success)
+        //            {
+        //                foreach (var d in decremented)
+        //                    try { await _productRepo.IncrementStockAsync(d.productObjectId, d.size, d.currency, d.qty); } catch { }
 
-                        await _orderRepo.DeleteAsync(created.Id);
-                        return BadRequest(ApiResponse<object>.Fail(claim.Error ?? "Failed to claim coupon", null, HttpStatusCode.BadRequest));
-                    }
+        //                await _orderRepo.DeleteAsync(created.Id);
+        //                return BadRequest(ApiResponse<object>.Fail(claim.Error ?? "Failed to claim coupon", null, HttpStatusCode.BadRequest));
+        //            }
 
-                    created.CouponUsageRecorded = true;
-                    await _orderRepo.UpdateAsync(created.Id, created);
-                }
+        //            created.CouponUsageRecorded = true;
+        //            await _orderRepo.UpdateAsync(created.Id, created);
+        //        }
 
-                // Loyalty points deduction (unchanged)
-                if (loyaltyDiscountAmount > 0)
-                {
-                    var user = await _userRepo.GetByIdAsync(userId);
-                    if (user?.LoyaltyPoints > 0)
-                        await _userRepo.TryDeductLoyaltyPointsAsync(userId, user.LoyaltyPoints.Value);
-                }
+        //        // Loyalty points deduction (unchanged)
+        //        if (loyaltyDiscountAmount > 0)
+        //        {
+        //            var user = await _userRepo.GetByIdAsync(userId);
+        //            if (user?.LoyaltyPoints > 0)
+        //                await _userRepo.TryDeductLoyaltyPointsAsync(userId, user.LoyaltyPoints.Value);
+        //        }
 
-                // Clear user cart
-                await _cartRepo.ClearAsync(userId);
+        //        // Clear user cart
+        //        await _cartRepo.ClearAsync(userId);
 
-                // Payment handling
-                if (created.PaymentMethod.Equals("cod", StringComparison.OrdinalIgnoreCase))
-                {
-                    return CreatedAtAction(nameof(Get), new { id = created.Id },
-                        ApiResponse<Order>.Created(created, "Order created; pay on delivery."));
-                }
+        //        // Payment handling
+        //        if (created.PaymentMethod.Equals("cod", StringComparison.OrdinalIgnoreCase))
+        //        {
+        //            return CreatedAtAction(nameof(Get), new { id = created.Id },
+        //                ApiResponse<Order>.Created(created, "Order created; pay on delivery."));
+        //        }
 
-                if (created.PaymentMethod.Equals("razorpay", StringComparison.OrdinalIgnoreCase))
-                {
-                    var rpOrder = await _razorpayService.CreateOrderAsync(created.Total, created.Currency, created.Id);
-                    created.RazorpayOrderId = rpOrder.id;
-                    await _orderRepo.UpdateAsync(created.Id, created);
+        //        if (created.PaymentMethod.Equals("razorpay", StringComparison.OrdinalIgnoreCase))
+        //        {
+        //            var rpOrder = await _razorpayService.CreateOrderAsync(created.Total, created.Currency, created.Id);
+        //            created.RazorpayOrderId = rpOrder.id;
+        //            await _orderRepo.UpdateAsync(created.Id, created);
 
-                    var response = new
-                    {
-                        Order = created,
-                        Razorpay = new
-                        {
-                            orderId = rpOrder.id,
-                            amount = rpOrder.amount,
-                            currency = rpOrder.currency,
-                            key = _razorpayService.KeyId
-                        }
-                    };
+        //            var response = new
+        //            {
+        //                Order = created,
+        //                Razorpay = new
+        //                {
+        //                    orderId = rpOrder.id,
+        //                    amount = rpOrder.amount,
+        //                    currency = rpOrder.currency,
+        //                    key = _razorpayService.KeyId
+        //                }
+        //            };
 
-                    return CreatedAtAction(nameof(Get), new { id = created.Id },
-                        ApiResponse<object>.Created(response, "Order created, proceed with Razorpay checkout."));
-                }
+        //            return CreatedAtAction(nameof(Get), new { id = created.Id },
+        //                ApiResponse<object>.Created(response, "Order created, proceed with Razorpay checkout."));
+        //        }
 
-                return CreatedAtAction(nameof(Get), new { id = created.Id },
-                    ApiResponse<Order>.Created(created, "Order created successfully"));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Order creation failed for user {UserId}", userId);
-                return StatusCode(500, ApiResponse<object>.Fail("Order creation failed.", null, HttpStatusCode.InternalServerError));
-            }
-        }
+        //        return CreatedAtAction(nameof(Get), new { id = created.Id },
+        //            ApiResponse<Order>.Created(created, "Order created successfully"));
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        _logger.LogError(ex, "Order creation failed for user {UserId}", userId);
+        //        return StatusCode(500, ApiResponse<object>.Fail("Order creation failed.", null, HttpStatusCode.InternalServerError));
+        //    }
+        //}
 
         // -------------------------------------------
         // PATCH: api/orders/{id}/status
@@ -387,6 +387,24 @@ namespace ShoppingPlatform.Controllers
             };
 
             return Ok(response);
+        }
+
+
+        [HttpPost]
+        [Authorize]
+
+        public async Task<IActionResult> CreateOrder([FromBody] CreateOrderRequestV2 req)
+        {
+            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "anonymous";
+            try
+            {
+                var order = await _orderRepo.CreateOrderAsync(req, userId);
+                return Ok(new { success = true, orderId = order.Id, razorpayOrderId = order.RazorpayOrderId, total = order.Total });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { success = false, message = ex.Message });
+            }
         }
     }
 }

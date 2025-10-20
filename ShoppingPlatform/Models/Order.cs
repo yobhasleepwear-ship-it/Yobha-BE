@@ -15,10 +15,8 @@ namespace ShoppingPlatform.Models
         public string ProductObjectId { get; set; } = string.Empty;
 
         public string ProductName { get; set; } = string.Empty;
-        public string VariantSku { get; set; } = string.Empty;
-        public string? VariantId { get; set; }
         public int Quantity { get; set; }
-
+        public string? Size { get; set; }
         // store money as Decimal128
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal UnitPrice { get; set; }
@@ -26,14 +24,10 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal LineTotal { get; set; } // UnitPrice * Quantity (snapshot)
 
-        [BsonRepresentation(BsonType.Decimal128)]
-        public decimal? CompareAtPrice { get; set; }
-
-        public string Currency { get; set; } = "INR";
+        public string? Currency { get; set; }
 
         // Snapshot UI fields
         public string? ThumbnailUrl { get; set; }
-        public string? Slug { get; set; }
     }
 
     public class Order
@@ -83,6 +77,12 @@ namespace ShoppingPlatform.Models
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }
+
+        //shipping
+        public string? ShippingPartner { get; set; }         // "BlueDart"
+        public string? ShippingTrackingId { get; set; }      // partner tracking id
+        public DateTime? ShippedAt { get; set; }
+        public string? ShippingPartnerResponse { get; set; } // raw response for debugging
     }
 
 

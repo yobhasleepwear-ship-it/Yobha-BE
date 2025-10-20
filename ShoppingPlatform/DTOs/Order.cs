@@ -33,4 +33,24 @@ namespace ShoppingPlatform.DTOs
         public decimal? LoyaltyDiscountAmount { get; set; }// points to amount calcualtions at frontend
     }
 
+    public class CreateOrderRequestV2
+    {
+        public string Currency { get; set; }
+        public List<ProductRequest> productRequests { get; set; }
+        public Address ShippingAddress { get; set; }
+        public string PaymentMethod { get; set; } // "COD" or "razorpay"
+        public string? CouponCode { get; set; }
+        public decimal? CouponDiscount { get; set; }
+
+        public decimal? LoyaltyDiscountAmount { get; set; }// points to amount calcualtions at frontend
+    }
+
+    public class ProductRequest
+    { 
+        public string id { get; set; }
+        public string Size { get; set; }
+        public int Quantity { get; set; }
+
+    }
+
 }
