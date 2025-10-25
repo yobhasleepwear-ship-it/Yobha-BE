@@ -1,7 +1,7 @@
 ﻿using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Bson;
 
-public class JobPosting
+public class   JobPosting
 {
     [BsonId]
     public ObjectId Id { get; set; }

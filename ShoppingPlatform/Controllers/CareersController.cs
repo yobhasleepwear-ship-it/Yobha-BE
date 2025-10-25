@@ -34,7 +34,8 @@ namespace ShoppingPlatform.Controllers
             var jobs = await _jobRepo.GetAllAsync();
             // filter and return only Active and not expired
             var result = jobs
-                .Where(j => j.Status == "Active" && j.ApplicationDeadline > DateTime.UtcNow);
+                .Where(j => string.Equals(j.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                            && j.ApplicationDeadline > DateTime.UtcNow);
 
             if (!string.IsNullOrWhiteSpace(department))
             {
@@ -164,6 +165,135 @@ namespace ShoppingPlatform.Controllers
 
             // You may want to validate dto.Status against allowed values: Received|UnderReview|Rejected|Shortlisted|Hired
             await _appRepo.UpdateStatusAsync(objId, dto.Status.Trim());
+            return NoContent();
+        }
+
+        // ----------------------------
+        // Admin: JobPosting management (all admin-only)
+        // POST   /api/careers/admin  -> But to keep route pattern consistent we expose under /api/careers/admin/...
+        // ----------------------------
+
+        /// <summary>
+        /// Create a new job posting (admin).
+        /// POST /api/careers/admin
+        /// </summary>
+        [HttpPost("admin")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> CreateJob([FromBody] CreateJobPostingDto dto)
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.JobId)) return BadRequest("JobId is required");
+
+            var job = new JobPosting
+            {
+                JobId = dto.JobId.Trim(),
+                JobTitle = dto.JobTitle?.Trim(),
+                Department = dto.Department,
+                JobType = dto.JobType,
+                Location = dto.Location,
+                SalaryRange = dto.SalaryRange,
+                ExperienceRequired = dto.ExperienceRequired,
+                Qualification = dto.Qualification,
+                SkillsRequired = dto.SkillsRequired ?? new(),
+                JobDescription = dto.JobDescription,
+                Responsibilities = dto.Responsibilities ?? new(),
+                ApplicationFee = dto.ApplicationFee ?? new(),
+                ApplicationDeadline = dto.ApplicationDeadline,
+                PostedBy = dto.PostedBy,
+                Status = string.IsNullOrWhiteSpace(dto.Status) ? "Draft" : dto.Status.Trim(),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            try
+            {
+                var created = await _jobRepo.CreateAsync(job);
+                return CreatedAtAction(nameof(GetJobByIdAdmin), new { id = created.Id.ToString() }, created);
+            }
+            catch (Exception ex)
+            {
+                // repo throws for duplicates / other DB issues; surface friendly message
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Get job posting by ObjectId (admin)
+        /// GET /api/careers/admin/{id}
+        /// </summary>
+        [HttpGet("admin/{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> GetJobByIdAdmin(string id)
+        {
+            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
+            var job = await _jobRepo.GetByIdAsync(objId);
+            if (job == null) return NotFound();
+            return Ok(job);
+        }
+
+        /// <summary>
+        /// List all job postings (admin) - optional status filter
+        /// GET /api/careers/admin
+        /// </summary>
+        [HttpGet("admin")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> ListJobsAdmin([FromQuery] string status = null)
+        {
+            var jobs = await _jobRepo.GetAllAsync(status);
+            return Ok(jobs);
+        }
+
+        /// <summary>
+        /// Update job posting (admin)
+        /// PUT /api/careers/admin/{id}
+        /// </summary>
+        [HttpPut("admin/{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> UpdateJob(string id, [FromBody] CreateJobPostingDto dto)
+        {
+            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
+
+            var existing = await _jobRepo.GetByIdAsync(objId);
+            if (existing == null) return NotFound("Job posting not found");
+
+            // update fields (only when provided)
+            existing.JobId = string.IsNullOrWhiteSpace(dto.JobId) ? existing.JobId : dto.JobId.Trim();
+            existing.JobTitle = dto.JobTitle ?? existing.JobTitle;
+            existing.Department = dto.Department ?? existing.Department;
+            existing.JobType = dto.JobType ?? existing.JobType;
+            existing.Location = dto.Location ?? existing.Location;
+            existing.SalaryRange = dto.SalaryRange ?? existing.SalaryRange;
+            existing.ExperienceRequired = dto.ExperienceRequired ?? existing.ExperienceRequired;
+            existing.Qualification = dto.Qualification ?? existing.Qualification;
+            existing.SkillsRequired = dto.SkillsRequired ?? existing.SkillsRequired;
+            existing.JobDescription = dto.JobDescription ?? existing.JobDescription;
+            existing.Responsibilities = dto.Responsibilities ?? existing.Responsibilities;
+            existing.ApplicationFee = dto.ApplicationFee ?? existing.ApplicationFee;
+            existing.ApplicationDeadline = dto.ApplicationDeadline != default ? dto.ApplicationDeadline : existing.ApplicationDeadline;
+            existing.PostedBy = dto.PostedBy ?? existing.PostedBy;
+            existing.Status = dto.Status ?? existing.Status;
+            existing.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                var updated = await _jobRepo.UpdateAsync(objId, existing);
+                return Ok(updated);
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Delete job posting (admin)
+        /// DELETE /api/careers/admin/{id}
+        /// </summary>
+        [HttpDelete("admin/{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> DeleteJob(string id)
+        {
+            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
+            await _jobRepo.DeleteAsync(objId);
             return NoContent();
         }
     }
