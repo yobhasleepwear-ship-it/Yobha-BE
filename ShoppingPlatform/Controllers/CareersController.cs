@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization; // <-- ensure you have auth in pipeline
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
+using MongoDB.Driver;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
@@ -176,16 +177,27 @@ namespace ShoppingPlatform.Controllers
         /// <summary>
         /// Create a new job posting (admin).
         /// POST /api/careers/admin
-        /// </summary>
         [HttpPost("admin")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> CreateJob([FromBody] CreateJobPostingDto dto)
         {
-            if (dto == null || string.IsNullOrWhiteSpace(dto.JobId)) return BadRequest("JobId is required");
+            if (dto == null || string.IsNullOrWhiteSpace(dto.JobId))
+                return BadRequest("JobId is required");
 
+            var requestedJobId = dto.JobId.Trim();
+
+            // 1) Check if jobId already exists
+            var existing = await _jobRepo.GetByJobIdAsync(requestedJobId);
+            if (existing != null)
+            {
+                // JobId already in use
+                return Conflict(new { message = $"JobId '{requestedJobId}' already exists." });
+            }
+
+            // 2) Create job object
             var job = new JobPosting
             {
-                JobId = dto.JobId.Trim(),
+                JobId = requestedJobId,
                 JobTitle = dto.JobTitle?.Trim(),
                 Department = dto.Department,
                 JobType = dto.JobType,
@@ -209,9 +221,13 @@ namespace ShoppingPlatform.Controllers
                 var created = await _jobRepo.CreateAsync(job);
                 return CreatedAtAction(nameof(GetJobByIdAdmin), new { id = created.Id.ToString() }, created);
             }
+            catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Defensive: if a concurrent request inserted the same jobId between our check and insert.
+                return Conflict(new { message = $"JobId '{requestedJobId}' already exists." });
+            }
             catch (Exception ex)
             {
-                // repo throws for duplicates / other DB issues; surface friendly message
                 return BadRequest(new { message = ex.Message });
             }
         }
@@ -255,8 +271,25 @@ namespace ShoppingPlatform.Controllers
             var existing = await _jobRepo.GetByIdAsync(objId);
             if (existing == null) return NotFound("Job posting not found");
 
-            // update fields (only when provided)
-            existing.JobId = string.IsNullOrWhiteSpace(dto.JobId) ? existing.JobId : dto.JobId.Trim();
+            // If client is trying to change jobId, ensure uniqueness
+            if (!string.IsNullOrWhiteSpace(dto.JobId))
+            {
+                var newJobId = dto.JobId.Trim();
+                if (!string.Equals(newJobId, existing.JobId, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Check if some other posting already uses newJobId
+                    var other = await _jobRepo.GetByJobIdAsync(newJobId);
+                    if (other != null && other.Id != existing.Id)
+                    {
+                        return Conflict(new { message = $"JobId '{newJobId}' is already used by another job posting." });
+                    }
+
+                    // assign new job id
+                    existing.JobId = newJobId;
+                }
+            }
+
+            // update other fields (only when provided)
             existing.JobTitle = dto.JobTitle ?? existing.JobTitle;
             existing.Department = dto.Department ?? existing.Department;
             existing.JobType = dto.JobType ?? existing.JobType;
@@ -277,6 +310,11 @@ namespace ShoppingPlatform.Controllers
             {
                 var updated = await _jobRepo.UpdateAsync(objId, existing);
                 return Ok(updated);
+            }
+            catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+            {
+                // Defensive: DB unique index prevented the change (concurrent race)
+                return Conflict(new { message = "JobId already exists (conflict)." });
             }
             catch (Exception ex)
             {

@@ -35,7 +35,8 @@ namespace ShoppingPlatform.Models
         [BsonId]
         [BsonRepresentation(BsonType.ObjectId)]
         public string Id { get; set; } = string.Empty;
-
+        
+        public string OrderNumber { get; set; } = string.Empty;
         public string UserId { get; set; } = string.Empty;
         public List<OrderItem> Items { get; set; } = new();
 

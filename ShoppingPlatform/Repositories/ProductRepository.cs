@@ -128,16 +128,38 @@ namespace ShoppingPlatform.Repositories
         // -----------------------
         public async Task CreateAsync(Product product)
         {
-            if (product == null) throw new ArgumentNullException(nameof(product));
+            if (product == null)
+                throw new ArgumentNullException(nameof(product));
+
+            // Check for existing product with same ProductId
+            var existingProduct = await _collection
+                .Find(p => p.ProductId == product.ProductId)
+                .FirstOrDefaultAsync();
+
+            if (existingProduct != null)
+                throw new InvalidOperationException($"A product with ProductId '{product.ProductId}' already exists.");
+
             await _collection.InsertOneAsync(product);
         }
 
+
         public async Task UpdateAsync(Product product)
         {
-            if (product == null) throw new ArgumentNullException(nameof(product));
+            if (product == null)
+                throw new ArgumentNullException(nameof(product));
+
+            // Check for existing product with same ProductId but different _id
+            var duplicateProduct = await _collection
+                .Find(p => p.ProductId == product.ProductId && p.Id != product.Id)
+                .FirstOrDefaultAsync();
+
+            if (duplicateProduct != null)
+                throw new InvalidOperationException($"Another product with ProductId '{product.ProductId}' already exists.");
+
             var filter = Builders<Product>.Filter.Eq(p => p.Id, product.Id);
             await _collection.ReplaceOneAsync(filter, product);
         }
+
 
         public async Task DeleteAsync(string id)
         {
