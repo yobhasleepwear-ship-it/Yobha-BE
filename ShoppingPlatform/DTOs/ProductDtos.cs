@@ -20,6 +20,7 @@ namespace ShoppingPlatform.Dto
         // NEW: expose available swatches / sizes for frontend
         public List<string> AvailableColors { get; set; } = new List<string>();
         public List<string> AvailableSizes { get; set; } = new List<string>();
+        public List<Price> PriceList { get; set; } = new();
     }
 
     // Full product detail returned by GET /api/products/{id}

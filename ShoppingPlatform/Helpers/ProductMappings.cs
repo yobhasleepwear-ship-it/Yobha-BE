@@ -88,7 +88,8 @@ namespace ShoppingPlatform.Helpers
                 Available = available,
                 ProductMainCategory = p.ProductMainCategory ?? string.Empty,
                 AvailableColors = availableColors,
-                AvailableSizes = availableSizes
+                AvailableSizes = availableSizes,
+                PriceList = p.PriceList
             };
         }
 
