@@ -36,4 +36,14 @@ namespace ShoppingPlatform.Models
         public string Ans { get; set; }
     }
 
+    public class CreateBuybackDto
+    {
+        public string? OrderId { get; set; }
+        public string ProductId { get; set; }
+        public List<string> ProductUrl { get; set; }
+        public string InvoiceUrl { get; set; }
+        public string? Country { get; set; }
+        public List<QuizItem> Quiz { get; set; } = new();
+    }
+
 }

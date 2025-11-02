@@ -4,7 +4,7 @@ using MongoDB.Bson;
 public class   JobPosting
 {
     [BsonId]
-    public ObjectId Id { get; set; }
+    public string Id { get; set; }
 
 
     [BsonElement("jobId")]

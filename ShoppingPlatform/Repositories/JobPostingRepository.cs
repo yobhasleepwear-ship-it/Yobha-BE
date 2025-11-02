@@ -24,7 +24,7 @@ namespace ShoppingPlatform.Repositories
             if (existing != null) throw new System.Exception($"JobId '{job.JobId}' already exists.");
 
 
-            job.Id = ObjectId.GenerateNewId();
+            job.Id = ObjectId.GenerateNewId().ToString();
             job.CreatedAt = DateTime.UtcNow;
             job.UpdatedAt = job.CreatedAt;
             await _col.InsertOneAsync(job);
@@ -32,7 +32,7 @@ namespace ShoppingPlatform.Repositories
         }
 
 
-        public async Task<JobPosting> UpdateAsync(ObjectId id, JobPosting job)
+        public async Task<JobPosting> UpdateAsync(string id, JobPosting job)
         {
             // If job.JobId changed, ensure uniqueness
             var existingWithJobId = await _col.Find(j => j.JobId == job.JobId && j.Id != id).FirstOrDefaultAsync();
@@ -46,7 +46,7 @@ namespace ShoppingPlatform.Repositories
         }
 
 
-        public async Task<JobPosting> GetByIdAsync(ObjectId id)
+        public async Task<JobPosting> GetByIdAsync(string id)
         {
             return await _col.Find(j => j.Id == id).FirstOrDefaultAsync();
         }
@@ -65,7 +65,7 @@ namespace ShoppingPlatform.Repositories
         }
 
 
-        public async Task DeleteAsync(ObjectId id)
+        public async Task DeleteAsync(string id)
         {
             await _col.DeleteOneAsync(j => j.Id == id);
         }

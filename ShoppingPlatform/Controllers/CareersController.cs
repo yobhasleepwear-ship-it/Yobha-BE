@@ -125,9 +125,9 @@ namespace ShoppingPlatform.Controllers
         public async Task<IActionResult> GetApplication(string id)
         {
             if (string.IsNullOrWhiteSpace(id)) return BadRequest("id is required");
-            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("invalid id");
+            //if (!ObjectId.TryParse(id, out var objId)) return BadRequest("invalid id");
 
-            var app = await _appRepo.GetByIdAsync(objId);
+            var app = await _appRepo.GetByIdAsync(id);
             if (app == null) return NotFound();
             return Ok(app);
         }
@@ -161,11 +161,11 @@ namespace ShoppingPlatform.Controllers
         public async Task<IActionResult> UpdateApplicantStatus(string id, [FromBody] ApplicantStatusUpdateDto dto)
         {
             if (string.IsNullOrWhiteSpace(id)) return BadRequest("id is required");
-            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("invalid id");
+          //  if (!ObjectId.TryParse(id, out var objId)) return BadRequest("invalid id");
             if (dto == null || string.IsNullOrWhiteSpace(dto.Status)) return BadRequest("Status is required");
 
             // You may want to validate dto.Status against allowed values: Received|UnderReview|Rejected|Shortlisted|Hired
-            await _appRepo.UpdateStatusAsync(objId, dto.Status.Trim());
+            await _appRepo.UpdateStatusAsync(id, dto.Status.Trim());
             return NoContent();
         }
 
@@ -241,7 +241,7 @@ namespace ShoppingPlatform.Controllers
         public async Task<IActionResult> GetJobByIdAdmin(string id)
         {
             if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
-            var job = await _jobRepo.GetByIdAsync(objId);
+            var job = await _jobRepo.GetByIdAsync(id);
             if (job == null) return NotFound();
             return Ok(job);
         }
@@ -268,7 +268,7 @@ namespace ShoppingPlatform.Controllers
         {
             if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
 
-            var existing = await _jobRepo.GetByIdAsync(objId);
+            var existing = await _jobRepo.GetByIdAsync(id);
             if (existing == null) return NotFound("Job posting not found");
 
             // If client is trying to change jobId, ensure uniqueness
@@ -308,7 +308,7 @@ namespace ShoppingPlatform.Controllers
 
             try
             {
-                var updated = await _jobRepo.UpdateAsync(objId, existing);
+                var updated = await _jobRepo.UpdateAsync(id, existing);
                 return Ok(updated);
             }
             catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
@@ -330,8 +330,9 @@ namespace ShoppingPlatform.Controllers
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> DeleteJob(string id)
         {
-            if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
-            await _jobRepo.DeleteAsync(objId);
+            ////if (!ObjectId.TryParse(id, out var objId)) return BadRequest("Invalid ID");
+            if (string.IsNullOrEmpty(id)) return BadRequest("Id is required");
+            await _jobRepo.DeleteAsync(id);
             return NoContent();
         }
     }

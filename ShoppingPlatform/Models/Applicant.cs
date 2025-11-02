@@ -4,11 +4,11 @@ using MongoDB.Bson;
 public class Applicant
 {
     [BsonId]
-    public ObjectId Id { get; set; }
+    public string Id { get; set; }
 
 
     [BsonElement("jobObjectId")]
-    public ObjectId JobObjectId { get; set; }
+    public string JobObjectId { get; set; }
 
 
     [BsonElement("jobId")]

@@ -19,7 +19,7 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<Applicant> CreateAsync(Applicant applicant)
         {
-            applicant.Id = ObjectId.GenerateNewId();
+            applicant.Id = ObjectId.GenerateNewId().ToString();
             applicant.AppliedAt = DateTime.UtcNow;
             await _col.InsertOneAsync(applicant);
             return applicant;
@@ -43,13 +43,13 @@ namespace ShoppingPlatform.Repositories
         }
 
 
-        public async Task<Applicant> GetByIdAsync(ObjectId id)
+        public async Task<Applicant> GetByIdAsync(string id)
         {
             return await _col.Find(a => a.Id == id).FirstOrDefaultAsync();
         }
 
 
-        public async Task UpdateStatusAsync(ObjectId applicantId, string status)
+        public async Task UpdateStatusAsync(string applicantId, string status)
         {
             var update = Builders<Applicant>.Update.Set(a => a.Status, status);
             await _col.UpdateOneAsync(a => a.Id == applicantId, update);

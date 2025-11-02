@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using System.Security.Claims;
@@ -22,27 +23,31 @@ namespace ShoppingPlatform.Controllers
         // POST api/buyback/create
         [HttpPost("create")]
         [Authorize]
-        public async Task<IActionResult> CreateBuyback([FromBody] BuybackRequest request)
+        public async Task<IActionResult> CreateBuyback([FromBody] CreateBuybackDto dto)
         {
-            try
-            {
-                // get user id from token claims. adjust claim type if you use a different one.
-                var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
-                if (string.IsNullOrWhiteSpace(userId))
-                    return Unauthorized(ApiResponse<string>.Fail("User id not present in token."));
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+            if (string.IsNullOrWhiteSpace(userId))
+                return Unauthorized(ApiResponse<string>.Fail("User id not present in token."));
 
-                request.UserId = userId;
-                var created = await _buybackService.CreateBuybackAsync(request);
-                return Ok(ApiResponse<BuybackRequest>.Ok(created, "Buyback request submitted successfully."));
-            }
-            catch (ArgumentException aex)
+            var model = new BuybackRequest
             {
-                return BadRequest(ApiResponse<string>.Fail(aex.Message));
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, ApiResponse<string>.Fail($"Server error: {ex.Message}"));
-            }
+                Id = ObjectId.GenerateNewId().ToString(),
+                UserId = userId,
+                OrderId = dto.OrderId,
+                ProductId = dto.ProductId,
+                ProductUrl = dto.ProductUrl ?? new List<string>(),
+                InvoiceUrl = dto.InvoiceUrl,
+                Country = dto.Country,
+                Quiz = dto.Quiz ?? new List<QuizItem>(),
+                BuybackStatus = "pending",
+                FinalStatus = "pending",
+                DeliveryStatus = "pending",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var created = await _buybackService.CreateBuybackAsync(model);
+            return Ok(ApiResponse<BuybackRequest>.Ok(created, "Buyback request submitted successfully."));
         }
 
         // GET api/buyback/getBuyBackDetails
