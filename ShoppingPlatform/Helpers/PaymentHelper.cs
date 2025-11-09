@@ -2,7 +2,6 @@
 using System.Text.Json;
 using System.Text;
 using ShoppingPlatform.Repositories;
-using Microsoft.Extensions.Caching.Memory;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.DTOs;
 
@@ -13,18 +12,15 @@ namespace ShoppingPlatform.Helpers
         private readonly ILogger<PaymentHelper> _log;
         private readonly HttpClient _http;
         private readonly ISecretsRepository _secretsRepo;
-        private readonly IMemoryCache _cache;
 
-        public PaymentHelper(HttpClient httpClient, ILogger<PaymentHelper> log, ISecretsRepository secretsRepo, IMemoryCache cache)
+        public PaymentHelper(HttpClient httpClient, ILogger<PaymentHelper> log, ISecretsRepository secretsRepo)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _log = log ?? throw new ArgumentNullException(nameof(log));
             _secretsRepo = secretsRepo ?? throw new ArgumentNullException(nameof(secretsRepo));
-            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         }
 
-        // Creates a razorpay order. Use environment var keys for security.
-        // 'isInternational' flag toggles which key pair to use.
+        // Creates a Razorpay order. Fetches keys directly from DB each time.
         public async Task<RazorpayOrderResult> CreateRazorpayOrderAsync(string orderId, decimal amount, string currency, bool isInternational = false)
         {
             var result = new RazorpayOrderResult
@@ -40,7 +36,7 @@ namespace ShoppingPlatform.Helpers
             // convert to smallest unit (paise for INR)
             long smallestUnit = ConvertToSmallestCurrencyUnit(amount, currency);
 
-            // Defensive check: Razorpay won't accept zero-amount orders. Return a clear debug result instead of throwing.
+            // Defensive check: Razorpay won't accept zero-amount orders
             if (smallestUnit <= 0)
             {
                 result.ErrorMessage = "Amount must be greater than zero for Razorpay orders.";
@@ -59,10 +55,11 @@ namespace ShoppingPlatform.Helpers
             string payloadString = JsonSerializer.Serialize(payload);
             result.RequestPayload = payloadString;
 
-            var secrets = await GetRazorpaySecretsCachedAsync("RazorPay");
+            // --- Fetch secrets directly from DB (no cache) ---
+            var secrets = await GetRazorpaySecretsDirectAsync("RazorPay");
             if (secrets == null)
             {
-                _log.LogError("Razorpay secrets not found for '{AddedFor}'", "RazorPay");
+                _log.LogError("Razorpay secrets not found for AddedFor='RazorPay'");
                 result.ErrorMessage = "Payment provider credentials are not configured.";
                 return result;
             }
@@ -72,13 +69,12 @@ namespace ShoppingPlatform.Helpers
 
             if (string.IsNullOrWhiteSpace(keyId) || string.IsNullOrWhiteSpace(keySecret))
             {
-                _log.LogError("Razorpay keys are not configured correctly for '{AddedFor}' (intl={IsInt})", "RazorPay", isInternational);
-                result.ErrorMessage = "Razorpay keys are not configured.";
+                _log.LogError("Razorpay keys are not configured correctly (intl={IsInt}) for {OrderId}", isInternational, orderId);
+                result.ErrorMessage = "Razorpay keys are not configured correctly in DB.";
                 return result;
             }
 
-            // masked logging so you know keys are present without printing secrets
-            _log.LogInformation("Razorpay keys found (intl={IsInt}) for order {OrderId}", isInternational, orderId);
+            _log.LogInformation("Razorpay keys successfully loaded for {OrderId} (intl={IsInt})", orderId, isInternational);
 
             var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{keyId}:{keySecret}"));
 
@@ -87,7 +83,7 @@ namespace ShoppingPlatform.Helpers
                 Content = new StringContent(payloadString, Encoding.UTF8, "application/json")
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", auth);
-            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             HttpResponseMessage resp;
             try
@@ -99,7 +95,6 @@ namespace ShoppingPlatform.Helpers
             {
                 _log.LogError(ex, "HTTP request to Razorpay failed for order {OrderId}", orderId);
                 result.ErrorMessage = $"HTTP error: {ex.Message}";
-                // keep ResponseBody empty (no response) but return the error for debug
                 return result;
             }
 
@@ -107,20 +102,19 @@ namespace ShoppingPlatform.Helpers
             result.StatusCode = (int)resp.StatusCode;
             result.ResponseBody = body ?? string.Empty;
 
-            // always log the raw response body at debug level (truncated)
-            _log.LogDebug("Razorpay response for {OrderId} status={Status} bodyLen={Len} bodyPreview={Preview}",
-                orderId, resp.StatusCode, result.ResponseBody.Length, result.ResponseBody.Length > 400 ? result.ResponseBody.Substring(0, 400) : result.ResponseBody);
+            // Log raw body (trimmed)
+            _log.LogDebug("Razorpay response for {OrderId} status={Status} bodyLen={Len} preview={Preview}",
+                orderId, resp.StatusCode, result.ResponseBody.Length,
+                result.ResponseBody.Length > 300 ? result.ResponseBody[..300] + "..." : result.ResponseBody);
 
             if (!resp.IsSuccessStatusCode)
             {
-                // give the caller more context (status + body)
                 _log.LogError("Razorpay order creation failed for {OrderId}: {Status} {Body}", orderId, resp.StatusCode, result.ResponseBody);
-                result.ErrorMessage = $"Razorpay error: {(int)resp.StatusCode} - {Truncate(result.ResponseBody, 1000)}";
+                result.ErrorMessage = $"Razorpay error: {(int)resp.StatusCode} - {Truncate(result.ResponseBody, 800)}";
                 result.Success = false;
                 return result;
             }
 
-            // parse success response
             try
             {
                 using var doc = JsonDocument.Parse(body);
@@ -134,46 +128,57 @@ namespace ShoppingPlatform.Helpers
                 {
                     result.Success = false;
                     result.ErrorMessage = "Razorpay response missing 'id'.";
-                    _log.LogWarning("Razorpay response for {OrderId} missing 'id' property", orderId);
+                    _log.LogWarning("Razorpay response missing 'id' for {OrderId}", orderId);
                 }
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "Failed to parse Razorpay response JSON for order {OrderId}", orderId);
-                result.ErrorMessage = "Invalid JSON from Razorpay";
+                _log.LogError(ex, "Failed to parse Razorpay response JSON for {OrderId}", orderId);
+                result.ErrorMessage = "Invalid JSON from Razorpay.";
                 result.Success = false;
             }
 
             return result;
         }
 
-        // helper to truncate long debug strings
+        // --- New direct secret fetch without caching ---
+        private async Task<RazorPaySecrets?> GetRazorpaySecretsDirectAsync(string addedFor)
+        {
+            try
+            {
+                var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync(addedFor);
+                if (secretsDoc == null || secretsDoc.razorPaySecrets == null)
+                {
+                    _log.LogWarning("No Razorpay secrets document found in DB for AddedFor={AddedFor}", addedFor);
+                    return null;
+                }
+
+                var s = secretsDoc.razorPaySecrets;
+                _log.LogInformation("Razorpay secrets fetched from DB: hasINR={HasINR} hasINRSecret={HasINRSecret} hasINTL={HasINTL} hasINTLSecret={HasINTLSecret}",
+                    !string.IsNullOrWhiteSpace(s.RAZOR_KEY_ID_INR),
+                    !string.IsNullOrWhiteSpace(s.RAZOR_KEY_SECRET_INR),
+                    !string.IsNullOrWhiteSpace(s.RAZOR_KEY_ID_INTL),
+                    !string.IsNullOrWhiteSpace(s.RAZOR_KEY_SECRET_INTL)
+                );
+
+                return s;
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Error fetching Razorpay secrets from DB for {AddedFor}", addedFor);
+                return null;
+            }
+        }
+
         private static string Truncate(string? value, int maxLength)
         {
             if (string.IsNullOrEmpty(value)) return string.Empty;
-            return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
+            return value.Length <= maxLength ? value : value[..maxLength] + "...";
         }
-        private async Task<RazorPaySecrets?> GetRazorpaySecretsCachedAsync(string addedFor)
-        {
-            var cacheKey = $"secrets:razorpay:{addedFor}";
-
-            if (_cache.TryGetValue(cacheKey, out RazorPaySecrets? cached) && cached != null)
-                return cached;
-
-            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync(addedFor);
-            if (secretsDoc == null || secretsDoc.razorPaySecrets == null)
-                return null;
-
-            // cache for 10 minutes (adjust as needed)
-            _cache.Set(cacheKey, secretsDoc.razorPaySecrets, TimeSpan.FromMinutes(10));
-            return secretsDoc.razorPaySecrets;
-        }
-
 
         private long ConvertToSmallestCurrencyUnit(decimal amount, string currency)
         {
-            // Basic handling: INR -> paise (x100). For other currencies you may need special rules.
-            // This helper can be extended per-currency.
+            // INR -> paise (x100)
             return (long)decimal.Round(amount * 100m);
         }
     }
