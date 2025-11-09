@@ -392,8 +392,6 @@ namespace ShoppingPlatform.Controllers
 
         [HttpPost]
         [Authorize]
-
-        [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] CreateOrderRequestV2 req)
         {
             if (req == null) return BadRequest("Request body required");
@@ -433,6 +431,29 @@ namespace ShoppingPlatform.Controllers
 
             // Return the result anyway (will include RazorpayDebug)
             return BadRequest(result);
+        }
+
+
+        [HttpPost("update-payment")]
+        [Authorize]
+        public async Task<IActionResult> UpdatePaymentStatus([FromBody] UpdatePaymentStatusRequest req)
+        {
+            if (string.IsNullOrWhiteSpace(req.RazorpayOrderId))
+                return BadRequest("RazorpayOrderId is required.");
+
+            try
+            {
+                var result = await _orderRepo.UpdatePaymentStatusAsync(req.RazorpayOrderId, req.RazorpayPaymentId, req.IsSuccess);
+                if (!result)
+                    return NotFound($"Order with RazorpayOrderId {req.RazorpayOrderId} not found.");
+
+                return Ok(new { success = true, message = "Payment status updated successfully." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update payment status for {RazorpayOrderId}", req.RazorpayOrderId);
+                return StatusCode(500, new { success = false, message = "Internal server error." });
+            }
         }
     }
 }

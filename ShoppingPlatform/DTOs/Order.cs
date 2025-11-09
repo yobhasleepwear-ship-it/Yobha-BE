@@ -81,9 +81,17 @@ namespace ShoppingPlatform.DTOs
         public string? RazorpayOrderId { get; set; }
         public decimal Total { get; set; }
         // full debug object returned from the payment helper
-        public RazorpayOrderResult? RazorpayDebug { get; set; }
+        //public RazorpayOrderResult? RazorpayDebug { get; set; }
         // mirror what's saved in DB for quick inspection
-        public string? PaymentGatewayResponse { get; set; }
+        //public string? PaymentGatewayResponse { get; set; }
+        public string? GiftCardNumber { get; set; }
+    }
+
+    public class UpdatePaymentStatusRequest
+    {
+        public string RazorpayOrderId { get; set; } = string.Empty;
+        public string RazorpayPaymentId { get; set; } = string.Empty;
+        public bool IsSuccess { get; set; } = true;
     }
 
 }

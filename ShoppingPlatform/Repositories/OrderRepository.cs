@@ -145,8 +145,8 @@ namespace ShoppingPlatform.Repositories
 
             return await _col.CountDocumentsAsync(filter);
         }
-
-public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
+        
+        public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
 {
     if (req == null) throw new ArgumentNullException(nameof(req));
     if (req.productRequests == null) req.productRequests = new List<ProductRequest>();
@@ -317,8 +317,9 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
                     OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
                     RazorpayOrderId = razorResult.RazorpayOrderId,
                     Total = order.Total,
-                    RazorpayDebug = razorResult,
-                    PaymentGatewayResponse = gatewayDebugJson
+                    GiftCardNumber = order.GiftCardNumber,
+                    //RazorpayDebug = razorResult,
+                    //PaymentGatewayResponse = gatewayDebugJson
                 };
             }
 
@@ -330,7 +331,9 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
                 OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
                 RazorpayOrderId = order.RazorpayOrderId,
                 Total = order.Total,
-                PaymentGatewayResponse = order.PaymentGatewayResponse
+                //PaymentGatewayResponse = order.PaymentGatewayResponse
+                GiftCardNumber = order.GiftCardNumber,
+
             };
         }
         catch (Exception)
@@ -461,8 +464,10 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
                     OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
                     RazorpayOrderId = razorResult.RazorpayOrderId,
                     Total = order.Total,
-                    RazorpayDebug = razorResult,
-                    PaymentGatewayResponse = gatewayDebugJson
+                    GiftCardNumber = order.GiftCardNumber,
+
+                    //RazorpayDebug = razorResult,
+                    //PaymentGatewayResponse = gatewayDebugJson
                 };
 
                 return responseDto;
@@ -476,7 +481,8 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
                 OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
                 RazorpayOrderId = order.RazorpayOrderId,
                 Total = order.Total,
-                PaymentGatewayResponse = order.PaymentGatewayResponse
+                GiftCardNumber = order.GiftCardNumber,
+                //PaymentGatewayResponse = order.PaymentGatewayResponse
             };
         }
         catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
@@ -495,6 +501,7 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
 
     throw new InvalidOperationException("Failed to create order after retries.");
 }
+
         // helper: rollback inventory if needed (best-effort compensating update)
         private async Task TryRollbackInventoryAsync(IEnumerable<OrderItem> orderItems)
         {
@@ -575,110 +582,16 @@ public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req
 
 
 
-
-        private async Task TryRollbackInventory(IEnumerable<OrderItem> items)
+        public async Task<bool> UpdatePaymentStatusAsync(string razorpayOrderId, string razorpayPaymentId, bool isSuccess)
         {
-            foreach (var oi in items)
-            {
-                try
-                {
-                    var filter = Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId);
-                    var update = Builders<Product>.Update.Inc("Prices.$[elem].Quantity", oi.Quantity);
-                    var updateOptions = new UpdateOptions
-                    {
-                        ArrayFilters = new List<ArrayFilterDefinition>
-                    {
-                        new BsonDocumentArrayFilterDefinition<BsonDocument>(
-                            new BsonDocument("elem.Size", oi.Size).Add("elem.Currency", oi.Currency))
-                    }
-                    };
-                    await _products.UpdateOneAsync(filter, update, updateOptions);
-                }
-                catch (Exception ex)
-                {
-                    //_logger.LogError(ex, "Rollback inventory failed for item {ProductId}", oi.ProductId);
-                }
-            }
-        }
+            var filter = Builders<Order>.Filter.Eq(o => o.RazorpayOrderId, razorpayOrderId);
+            var update = Builders<Order>.Update
+                .Set(o => o.RazorpayPaymentId, razorpayPaymentId)
+                .Set(o => o.PaymentStatus, isSuccess ? "Paid" : "Failed")
+                .Set(o => o.UpdatedAt, DateTime.UtcNow);
 
-        private async Task<string?> CreateRazorpayOrder(Order order)
-        {
-            // This is a placeholder — call Razorpay Orders API here using Razorpay SDK or HTTP client.
-            // Create order with amount in paise (INR * 100), currency, receipt = order.Id
-            // Save returned `id` and return it.
-            // Example (pseudo):
-            // var request = new { amount = (int)(order.Total*100), currency = order.Currency, receipt = order.Id };
-            // var client = _httpClientFactory.CreateClient("razorpay");
-            // Add Basic auth header using key/secret and POST to Razorpay
-            // parse response and return response.id
-            await Task.CompletedTask;
-            return null;
-        }
-
-        //public async Task CreateShipmentWithBlueDartAsync(Order order)
-        //{
-        //    // call BlueDart API only after order paid (or per your business rules)
-        //    // build payload using order.ShippingAddress and order.Items
-        //    var client = _httpClientFactory.CreateClient();
-        //    var dto = new
-        //    {
-        //        consignor = new { /* your account details */ },
-        //        consignee = new
-        //        {
-        //            name = order.ShippingAddress?.FullName,
-        //            phone = order.ShippingAddress?.MobileNumner,
-        //            address = order.ShippingAddress?.Line1,
-        //            city = order.ShippingAddress?.City,
-        //            pincode = order.ShippingAddress?.Zip,
-        //        },
-        //        parcels = order.Items.Select(i => new { name = i.ProductName, quantity = i.Quantity, value = i.LineTotal }).ToList()
-        //    };
-
-        //    var json = JsonSerializer.Serialize(dto);
-        //    var req = new HttpRequestMessage(HttpMethod.Post, _blueDartUrl + "/createShipment")
-        //    {
-        //        Content = new StringContent(json, Encoding.UTF8, "application/json")
-        //    };
-
-        //    // add auth headers as BlueDart requires
-        //    var resp = await client.SendAsync(req);
-        //    var text = await resp.Content.ReadAsStringAsync();
-
-        //    if (resp.IsSuccessStatusCode)
-        //    {
-        //        // parse tracking id and update order
-        //        var trackingId = ExtractTrackingFromResponse(text);
-        //        var update = Builders<Order>.Update
-        //            .Set(o => o.ShippingPartner, "BlueDart")
-        //            .Set(o => o.ShippingTrackingId, trackingId)
-        //            .Set(o => o.ShippingPartnerResponse, text)
-        //            .Set(o => o.UpdatedAt, DateTime.UtcNow);
-
-        //        await _col.UpdateOneAsync(o => o.Id == order.Id, update);
-        //    }
-        //    else
-        //    {
-        //        // log the error for manual retry
-        //        //_logger.LogError("BlueDart create shipment failed: {Response}", text);
-        //        // optionally persist response for debugging
-        //        var update = Builders<Order>.Update
-        //            .Set(o => o.ShippingPartnerResponse, text)
-        //            .Set(o => o.UpdatedAt, DateTime.UtcNow);
-        //        await _col.UpdateOneAsync(o => o.Id == order.Id, update);
-        //    }
-        //}
-
-        private string? ExtractTrackingFromResponse(string text)
-        {
-            // parse JSON response from BlueDart and return tracking id
-            try
-            {
-                using var doc = JsonDocument.Parse(text);
-                if (doc.RootElement.TryGetProperty("trackingId", out var t))
-                    return t.GetString();
-            }
-            catch { }
-            return null;
+            var result = await _col.UpdateOneAsync(filter, update);
+            return result.ModifiedCount > 0;
         }
     }
 }
