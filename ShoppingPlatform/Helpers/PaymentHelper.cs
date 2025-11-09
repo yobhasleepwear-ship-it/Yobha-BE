@@ -9,18 +9,17 @@ namespace ShoppingPlatform.Helpers
 {
     public class PaymentHelper
     {
-        private readonly ILogger _log;
+        private readonly ILogger<PaymentHelper> _log;
         private readonly HttpClient _http;
         private readonly ISecretsRepository _secretsRepo;
         private readonly IMemoryCache _cache;
 
-
-        public PaymentHelper(HttpClient httpClient, ILogger log, ISecretsRepository secretsRepo)
+        public PaymentHelper(HttpClient httpClient, ILogger<PaymentHelper> log, ISecretsRepository secretsRepo, IMemoryCache cache)
         {
-            _http = httpClient;
-            _log = log;
-            _secretsRepo = secretsRepo;
-
+            _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _log = log ?? throw new ArgumentNullException(nameof(log));
+            _secretsRepo = secretsRepo ?? throw new ArgumentNullException(nameof(secretsRepo));
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
         }
 
         // Creates a razorpay order. Use environment var keys for security.

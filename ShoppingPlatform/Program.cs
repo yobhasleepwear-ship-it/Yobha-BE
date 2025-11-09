@@ -141,9 +141,25 @@ builder.Services.AddScoped<ReferralService>();
 builder.Services.AddScoped<IJobPostingRepository, JobPostingRepository>();
 builder.Services.AddScoped<IApplicantRepository, ApplicantRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
-builder.Services.AddScoped<ShoppingPlatform.Helpers.GiftCardHelper>();
-builder.Services.AddScoped<ShoppingPlatform.Helpers.PaymentHelper>();
 builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
+
+// Add memory cache (used by PaymentHelper)
+builder.Services.AddMemoryCache();
+
+// Register typed Mongo collections used in helpers/repos
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<GiftCard>("giftcards"));
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Counter>("counters"));
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Order>("orders"));
+// products collection is accessed directly in repository from IMongoDatabase, still okay, but nothing wrong registering it:
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Product>("products"));
+
+// Register GiftCardHelper & PaymentHelper as typed clients/services
+// GiftCardHelper will still be resolved as scoped
+builder.Services.AddScoped<ShoppingPlatform.Helpers.GiftCardHelper>();
+
+// Register PaymentHelper as a typed HTTP client so its HttpClient parameter is resolved.
+// This also registers PaymentHelper in DI so constructor dependencies are injected.
+builder.Services.AddHttpClient<ShoppingPlatform.Helpers.PaymentHelper>();
 
 
 // Avoid duplicate registrations; add HttpClient for Razorpay

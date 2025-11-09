@@ -9,7 +9,7 @@ namespace ShoppingPlatform.Helpers
         private readonly ILogger _log;
 
         public GiftCardHelper(IMongoDatabase db, IMongoClient mongoClient,
-                              ILogger log)
+                       ILogger<GiftCardHelper> log)
         {
             _giftCardCollection = db.GetCollection<GiftCard>("giftcards");
             _log = log;
