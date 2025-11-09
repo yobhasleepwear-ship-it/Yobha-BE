@@ -146,350 +146,355 @@ namespace ShoppingPlatform.Repositories
             return await _col.CountDocumentsAsync(filter);
         }
 
-        public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
+public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
+{
+    if (req == null) throw new ArgumentNullException(nameof(req));
+    if (req.productRequests == null) req.productRequests = new List<ProductRequest>();
+
+    // Basic validation
+    if (string.IsNullOrWhiteSpace(req.Currency)) throw new ArgumentException("Currency required");
+    if (req.ShippingAddress == null && (req.productRequests == null || !req.productRequests.Any()))
+    {
+        // allow empty shipping address only if buying gift card
+        if (req.GiftCardAmount == null) throw new ArgumentException("ShippingAddress required for non-gift-card orders");
+    }
+
+    // resolve products only if there are items
+    var orderItems = new List<OrderItem>();
+    List<Product> products = new List<Product>();
+    if (req.productRequests.Any())
+    {
+        var productIds = req.productRequests.Select(p => p.id).Distinct().ToList();
+        var filter = Builders<Product>.Filter.In(p => p.ProductId, productIds);
+        products = await _products.Find(filter).ToListAsync();
+
+        if (products.Count != productIds.Count)
         {
-            if (req == null) throw new ArgumentNullException(nameof(req));
-            if (req.productRequests == null) req.productRequests = new List<ProductRequest>();
+            var missing = productIds.Except(products.Select(p => p.ProductId));
+            throw new InvalidOperationException($"Products not found: {string.Join(',', missing)}");
+        }
 
-            // Basic validation
-            if (string.IsNullOrWhiteSpace(req.Currency)) throw new ArgumentException("Currency required");
-            if (req.ShippingAddress == null && (req.productRequests == null || !req.productRequests.Any()))
+        foreach (var pr in req.productRequests)
+        {
+            var prod = products.Single(p => p.Id == pr.id);
+
+            var priceEntry = prod.PriceList.FirstOrDefault(px =>
+                string.Equals(px.Size, pr.Size, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(px.Currency, req.Currency, StringComparison.OrdinalIgnoreCase));
+
+            if (priceEntry == null) throw new InvalidOperationException($"Price not found for product {pr.id}, size {pr.Size}, currency {req.Currency}");
+
+            int qty = pr.Quantity > 0 ? pr.Quantity : 1;
+            if (priceEntry.Quantity < qty) throw new InvalidOperationException($"Insufficient stock for product {pr.id}");
+
+            decimal unitPrice = priceEntry.PriceAmount;
+            decimal lineTotal = unitPrice * qty;
+
+            orderItems.Add(new OrderItem
             {
-                // allow empty shipping address only if buying gift card
-                if (req.GiftCardAmount == null) throw new ArgumentException("ShippingAddress required for non-gift-card orders");
-            }
+                ProductId = prod.ProductId,
+                ProductObjectId = prod.Id,
+                ProductName = prod.Name,
+                Quantity = qty,
+                Size = pr.Size,
+                Fabric = pr.Fabric,
+                Color = pr.Color,
+                UnitPrice = unitPrice,
+                LineTotal = lineTotal,
+                Currency = priceEntry.Currency,
+                ThumbnailUrl = prod.Images?.FirstOrDefault()?.ThumbnailUrl,
+                Monogram = pr.Monogram
+            });
+        }
+    }
 
-            // resolve products only if there are items
-            var orderItems = new List<OrderItem>();
-            List<Product> products = new List<Product>();
-            if (req.productRequests.Any())
+    // compute totals
+    decimal subtotal = orderItems.Sum(i => i.LineTotal);
+    decimal couponDiscount = req.CouponDiscount ?? 0m;
+    decimal loyaltyDiscount = req.LoyaltyDiscountAmount ?? 0m;
+    decimal discountTotal = couponDiscount + loyaltyDiscount;
+
+    if (discountTotal > subtotal) discountTotal = subtotal;
+
+    decimal shipping = 0m; // compute shipping rules
+    decimal tax = 0m;
+    decimal Total = subtotal + shipping + tax - discountTotal;
+           
+     
+    if ((req.GiftCardAmount ?? 0m) > 0m && string.IsNullOrEmpty(req.GiftCardNumber))
+    {
+                Total +=( req.GiftCardAmount??0m);
+    }
+
+    // assemble basic order (OrderNumber and Id set inside transaction)
+    var order = new Order
+    {
+        UserId = userId,
+        Items = orderItems,
+        SubTotal = subtotal,
+        Shipping = shipping,
+        Tax = tax,
+        Discount = discountTotal,
+        Total = Total, // might change if gift card applied
+        Currency = req.Currency,
+        ShippingAddress = req.ShippingAddress,
+        LoyaltyDiscountAmount = req.LoyaltyDiscountAmount,
+        CouponCode = req.CouponCode,
+        PaymentMethod = req.PaymentMethod ?? "COD",
+        PaymentStatus = "Pending",
+        Status = "Pending",
+        CreatedAt = DateTime.UtcNow,
+        GiftCardNumber = req.GiftCardNumber,
+        GiftCardAmount = req.GiftCardAmount,
+        ShippingRemarks = req.ShippingRemarks,
+        orderCountry = req.orderCountry,
+        Email = req.Email,
+    };
+
+    // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)
+    if (!order.Items.Any() && order.GiftCardAmount.HasValue && string.IsNullOrWhiteSpace(order.GiftCardNumber))
+    {
+        using var session = await _mongoClient.StartSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            var fiscal = GetFiscalYearString(DateTime.UtcNow);
+            var seq = await GetNextOrderSequenceAsync(fiscal, session);
+            order.OrderNumber = $"ORD{fiscal}{seq:D8}";
+
+            await _col.InsertOneAsync(session, order);
+
+            var giftCard = await _giftCardHelper.CreateGiftCardAsync(session, order.GiftCardAmount.Value, order.Currency, order.Id, userId);
+
+            var update = Builders<Order>.Update
+                .Set(o => o.GiftCardId, giftCard.Id)
+                .Set(o => o.GiftCardNumber, giftCard.GiftCardNumber);
+            await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), update);
+
+            await session.CommitTransactionAsync();
+
+            order.GiftCardId = giftCard.Id;
+            order.GiftCardNumber = giftCard.GiftCardNumber;
+
+            // --- NEW: If payment method is razorpay, create Razorpay order and persist debug info ---
+            if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
             {
-                var productIds = req.productRequests.Select(p => p.id).Distinct().ToList();
-                var filter = Builders<Product>.Filter.In(p => p.ProductId, productIds);
-                products = await _products.Find(filter).ToListAsync();
+                bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
 
-                if (products.Count != productIds.Count)
+                var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+
+                var gatewayDebug = new
                 {
-                    var missing = productIds.Except(products.Select(p => p.ProductId));
-                    throw new InvalidOperationException($"Products not found: {string.Join(',', missing)}");
+                    Request = razorResult.RequestPayload,
+                    Response = razorResult.ResponseBody,
+                    StatusCode = razorResult.StatusCode,
+                    Error = razorResult.ErrorMessage
+                };
+                string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
+
+                var payUpdate = Builders<Order>.Update
+                    .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
+                    .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
+
+                if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
+                {
+                    payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
+                    order.RazorpayOrderId = razorResult.RazorpayOrderId;
+                    order.PaymentStatus = "Pending";
+                }
+                else
+                {
+                    order.PaymentStatus = "Failed";
                 }
 
-                foreach (var pr in req.productRequests)
+                // persist payment fields (use session overload to be consistent)
+                await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), payUpdate);
+
+                return new CreateOrderResponse
                 {
-                    var prod = products.Single(p => p.Id == pr.id);
-
-                    var priceEntry = prod.PriceList.FirstOrDefault(px =>
-                        string.Equals(px.Size, pr.Size, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(px.Currency, req.Currency, StringComparison.OrdinalIgnoreCase));
-
-                    if (priceEntry == null) throw new InvalidOperationException($"Price not found for product {pr.id}, size {pr.Size}, currency {req.Currency}");
-
-                    int qty = pr.Quantity > 0 ? pr.Quantity : 1;
-                    if (priceEntry.Quantity < qty) throw new InvalidOperationException($"Insufficient stock for product {pr.id}");
-
-                    decimal unitPrice = priceEntry.PriceAmount;
-                    decimal lineTotal = unitPrice * qty;
-
-                    orderItems.Add(new OrderItem
-                    {
-                        ProductId = prod.ProductId,
-                        ProductObjectId = prod.Id,
-                        ProductName = prod.Name,
-                        Quantity = qty,
-                        Size = pr.Size,
-                        Fabric = pr.Fabric,
-                        Color = pr.Color,
-                        UnitPrice = unitPrice,
-                        LineTotal = lineTotal,
-                        Currency = priceEntry.Currency,
-                        ThumbnailUrl = prod.Images?.FirstOrDefault()?.ThumbnailUrl,
-                        Monogram = pr.Monogram
-                    });
-                }
+                    Success = razorResult.Success,
+                    Id = order.Id?.ToString() ?? string.Empty,
+                    OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
+                    RazorpayOrderId = razorResult.RazorpayOrderId,
+                    Total = order.Total,
+                    RazorpayDebug = razorResult,
+                    PaymentGatewayResponse = gatewayDebugJson
+                };
             }
 
-            // compute totals
-            decimal subtotal = orderItems.Sum(i => i.LineTotal);
-            decimal couponDiscount = req.CouponDiscount ?? 0m;
-            decimal loyaltyDiscount = req.LoyaltyDiscountAmount ?? 0m;
-            decimal discountTotal = couponDiscount + loyaltyDiscount;
-
-            if (discountTotal > subtotal) discountTotal = subtotal;
-
-            decimal shipping = 0m; // compute shipping rules
-            decimal tax = 0m;
-            decimal totalBeforeGiftCard = subtotal + shipping + tax - discountTotal;
-            if (totalBeforeGiftCard < 0) totalBeforeGiftCard = 0m;
-
-            // assemble basic order (OrderNumber and Id set inside transaction)
-            var order = new Order
+            // Non-razorpay payment for gift card: return as before
+            return new CreateOrderResponse
             {
-                UserId = userId,
-                Items = orderItems,
-                SubTotal = subtotal,
-                Shipping = shipping,
-                Tax = tax,
-                Discount = discountTotal,
-                Total = totalBeforeGiftCard, // might change if gift card applied
-                Currency = req.Currency,
-                ShippingAddress = req.ShippingAddress,
-                LoyaltyDiscountAmount = req.LoyaltyDiscountAmount,
-                CouponCode = req.CouponCode,
-                PaymentMethod = req.PaymentMethod ?? "COD",
-                PaymentStatus = "Pending",
-                Status = "Pending",
-                CreatedAt = DateTime.UtcNow,
-                GiftCardNumber = req.GiftCardNumber,
-                GiftCardAmount = req.GiftCardAmount,
-                ShippingRemarks = req.ShippingRemarks,
-                orderCountry = req.orderCountry,
-                Email = req.Email,
+                Success = true,
+                Id = order.Id?.ToString() ?? string.Empty,
+                OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
+                RazorpayOrderId = order.RazorpayOrderId,
+                Total = order.Total,
+                PaymentGatewayResponse = order.PaymentGatewayResponse
             };
+        }
+        catch (Exception)
+        {
+            await session.AbortTransactionAsync();
+            throw;
+        }
+    }
 
-            // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)
-            if (!order.Items.Any() && order.GiftCardAmount.HasValue && string.IsNullOrWhiteSpace(order.GiftCardNumber))
+    // Common path
+    const int maxAttempts = 3;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++)
+    {
+        using var session = await _mongoClient.StartSessionAsync();
+        session.StartTransaction();
+        try
+        {
+            var fiscal = GetFiscalYearString(DateTime.UtcNow);
+            var seq = await GetNextOrderSequenceAsync(fiscal, session);
+            order.OrderNumber = $"ORD{fiscal}{seq:D8}";
+
+            await _col.InsertOneAsync(session, order);
+
+            foreach (var oi in orderItems)
             {
-                using var session = await _mongoClient.StartSessionAsync();
-                session.StartTransaction();
-                try
+                var prodFilter = Builders<Product>.Filter.And(
+                    Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId),
+                    Builders<Product>.Filter.ElemMatch(p => p.PriceList,
+                        pr => pr.Size == oi.Size && pr.Currency == oi.Currency && pr.Quantity >= oi.Quantity)
+                );
+
+                var update = Builders<Product>.Update
+                    .Inc($"{"PriceList"}.$[elem].Quantity", -oi.Quantity)
+                    .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+                var updateOptions = new UpdateOptions
                 {
-                    var fiscal = GetFiscalYearString(DateTime.UtcNow);
-                    var seq = await GetNextOrderSequenceAsync(fiscal, session);
-                    order.OrderNumber = $"ORD{fiscal}{seq:D8}";
-
-                    await _col.InsertOneAsync(session, order);
-
-                    var giftCard = await _giftCardHelper.CreateGiftCardAsync(session, order.GiftCardAmount.Value, order.Currency, order.Id, userId);
-
-                    var update = Builders<Order>.Update
-                        .Set(o => o.GiftCardId, giftCard.Id)
-                        .Set(o => o.GiftCardNumber, giftCard.GiftCardNumber);
-                    await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), update);
-
-                    await session.CommitTransactionAsync();
-
-                    order.GiftCardId = giftCard.Id;
-                    order.GiftCardNumber = giftCard.GiftCardNumber;
-
-                    // --- NEW: If payment method is razorpay, create Razorpay order and persist debug info ---
-                    if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
-                    {
-                        bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
-
-                        var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
-
-                        var gatewayDebug = new
-                        {
-                            Request = razorResult.RequestPayload,
-                            Response = razorResult.ResponseBody,
-                            StatusCode = razorResult.StatusCode,
-                            Error = razorResult.ErrorMessage
-                        };
-                        string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
-
-                        var payUpdate = Builders<Order>.Update
-                            .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
-                            .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
-
-                        if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
-                        {
-                            payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
-                            order.RazorpayOrderId = razorResult.RazorpayOrderId;
-                            order.PaymentStatus = "Pending";
-                        }
-                        else
-                        {
-                            order.PaymentStatus = "Failed";
-                        }
-
-                        // persist payment fields (use session overload to be consistent)
-                        await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), payUpdate);
-
-                        return new CreateOrderResponse
-                        {
-                            Success = razorResult.Success,
-                            Id = order.Id?.ToString() ?? string.Empty,
-                            OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
-                            RazorpayOrderId = razorResult.RazorpayOrderId,
-                            Total = order.Total,
-                            RazorpayDebug = razorResult,
-                            PaymentGatewayResponse = gatewayDebugJson
-                        };
-                    }
-
-                    // Non-razorpay payment for gift card: return as before
-                    return new CreateOrderResponse
-                    {
-                        Success = true,
-                        Id = order.Id?.ToString() ?? string.Empty,
-                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
-                        RazorpayOrderId = order.RazorpayOrderId,
-                        Total = order.Total,
-                        PaymentGatewayResponse = order.PaymentGatewayResponse
-                    };
-                }
-                catch (Exception)
-                {
-                    await session.AbortTransactionAsync();
-                    throw;
-                }
-            }
-
-            // Common path
-            const int maxAttempts = 3;
-            for (int attempt = 1; attempt <= maxAttempts; attempt++)
-            {
-                using var session = await _mongoClient.StartSessionAsync();
-                session.StartTransaction();
-                try
-                {
-                    var fiscal = GetFiscalYearString(DateTime.UtcNow);
-                    var seq = await GetNextOrderSequenceAsync(fiscal, session);
-                    order.OrderNumber = $"ORD{fiscal}{seq:D8}";
-
-                    await _col.InsertOneAsync(session, order);
-
-                    foreach (var oi in orderItems)
-                    {
-                        var prodFilter = Builders<Product>.Filter.And(
-                            Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId),
-                            Builders<Product>.Filter.ElemMatch(p => p.PriceList,
-                                pr => pr.Size == oi.Size && pr.Currency == oi.Currency && pr.Quantity >= oi.Quantity)
-                        );
-
-                        var update = Builders<Product>.Update
-                            .Inc($"{"PriceList"}.$[elem].Quantity", -oi.Quantity)
-                            .Set(p => p.UpdatedAt, DateTime.UtcNow);
-
-                        var updateOptions = new UpdateOptions
-                        {
-                            ArrayFilters = new List<ArrayFilterDefinition>
+                    ArrayFilters = new List<ArrayFilterDefinition>
                 {
                     new BsonDocumentArrayFilterDefinition<BsonDocument>(
                         new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
                 }
-                        };
+                };
 
-                        var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
-                        if (result.ModifiedCount == 0)
-                        {
-                            await session.AbortTransactionAsync();
-                            throw new InvalidOperationException($"Concurrent stock update prevented decrement for product {oi.ProductId}");
-                        }
-                    }
-
-                    // Apply gift card if provided
-                    if (!string.IsNullOrWhiteSpace(req.GiftCardNumber))
-                    {
-                        var currentTotal = order.Total;
-                        if (currentTotal > 0)
-                        {
-                            var deductionResult = await _giftCardHelper.ApplyGiftCardAsync(session, req.GiftCardNumber.Trim(), currentTotal, order.Currency);
-
-                            var orderUpdate = Builders<Order>.Update
-                                .Set(o => o.GiftCardNumber, req.GiftCardNumber.Trim())
-                                .Set(o => o.GiftCardAppliedAmount, deductionResult.Deducted)
-                                .Set(o => o.GiftCardId, deductionResult.GiftCardId)
-                                .Set(o => o.GiftCardAppliedAt, DateTime.UtcNow)
-                                .Inc(o => o.Total, -deductionResult.Deducted);
-
-                            await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), orderUpdate);
-
-                            order.GiftCardAppliedAmount = deductionResult.Deducted;
-                            order.GiftCardId = deductionResult.GiftCardId;
-                            order.GiftCardNumber = req.GiftCardNumber.Trim();
-                            order.GiftCardAppliedAt = DateTime.UtcNow;
-                            order.Total -= deductionResult.Deducted;
-                            if (order.Total < 0) order.Total = 0m;
-                        }
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(order.CouponCode))
-                    {
-                        var couponUpdate = Builders<Order>.Update
-                            .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
-                        await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), couponUpdate);
-                    }
-
-                    await session.CommitTransactionAsync();
-
-                    if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
-                    {
-                        bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
-
-                        // call helper (returns request/response metadata)
-                        var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
-
-                        // prepare debug blob to persist in DB
-                        var gatewayDebug = new
-                        {
-                            Request = razorResult.RequestPayload,
-                            Response = razorResult.ResponseBody,
-                            StatusCode = razorResult.StatusCode,
-                            Error = razorResult.ErrorMessage
-                        };
-                        string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
-
-                        // update order doc: store debug JSON and set razorpay id only if available
-                        var payUpdate = Builders<Order>.Update
-                            .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
-                            .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
-
-                        if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
-                        {
-                            payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
-                            order.RazorpayOrderId = razorResult.RazorpayOrderId;
-                            order.PaymentStatus = "Pending";
-                        }
-                        else
-                        {
-                            order.PaymentStatus = "Failed";
-                        }
-
-                        await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
-
-                        // ---- RESPONSE MAPPING (changed only to populate Id & OrderId correctly) ----
-                        var responseDto = new CreateOrderResponse
-                        {
-                            Success = razorResult.Success,
-                            Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
-                            OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
-                            RazorpayOrderId = razorResult.RazorpayOrderId,
-                            Total = order.Total,
-                            RazorpayDebug = razorResult,
-                            PaymentGatewayResponse = gatewayDebugJson
-                        };
-
-                        return responseDto;
-                    }
-
-                    // Non-razorpay path: return success wrapper
-                    return new CreateOrderResponse
-                    {
-                        Success = true,
-                        Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
-                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
-                        RazorpayOrderId = order.RazorpayOrderId,
-                        Total = order.Total,
-                        PaymentGatewayResponse = order.PaymentGatewayResponse
-                    };
-                }
-                catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+                var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
+                if (result.ModifiedCount == 0)
                 {
                     await session.AbortTransactionAsync();
-                    if (attempt == maxAttempts) throw;
-                    continue;
-                }
-                catch (Exception)
-                {
-                    await session.AbortTransactionAsync();
-                    await TryRollbackInventoryAsync(orderItems);
-                    throw;
+                    throw new InvalidOperationException($"Concurrent stock update prevented decrement for product {oi.ProductId}");
                 }
             }
 
-            throw new InvalidOperationException("Failed to create order after retries.");
+            // Apply gift card if provided
+            if (!string.IsNullOrWhiteSpace(req.GiftCardNumber))
+            {
+                var currentTotal = order.Total;
+                if (currentTotal > 0)
+                {
+                    var deductionResult = await _giftCardHelper.ApplyGiftCardAsync(session, req.GiftCardNumber.Trim(), currentTotal, order.Currency);
+
+                    var orderUpdate = Builders<Order>.Update
+                        .Set(o => o.GiftCardNumber, req.GiftCardNumber.Trim())
+                        .Set(o => o.GiftCardAppliedAmount, deductionResult.Deducted)
+                        .Set(o => o.GiftCardId, deductionResult.GiftCardId)
+                        .Set(o => o.GiftCardAppliedAt, DateTime.UtcNow)
+                        .Inc(o => o.Total, -deductionResult.Deducted);
+
+                    await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), orderUpdate);
+
+                    order.GiftCardAppliedAmount = deductionResult.Deducted;
+                    order.GiftCardId = deductionResult.GiftCardId;
+                    order.GiftCardNumber = req.GiftCardNumber.Trim();
+                    order.GiftCardAppliedAt = DateTime.UtcNow;
+                    order.Total -= deductionResult.Deducted;
+                    if (order.Total < 0) order.Total = 0m;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(order.CouponCode))
+            {
+                var couponUpdate = Builders<Order>.Update
+                    .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
+                await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), couponUpdate);
+            }
+
+            await session.CommitTransactionAsync();
+
+            if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
+            {
+                bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
+
+                // call helper (returns request/response metadata)
+                var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+
+                // prepare debug blob to persist in DB
+                var gatewayDebug = new
+                {
+                    Request = razorResult.RequestPayload,
+                    Response = razorResult.ResponseBody,
+                    StatusCode = razorResult.StatusCode,
+                    Error = razorResult.ErrorMessage
+                };
+                string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
+
+                // update order doc: store debug JSON and set razorpay id only if available
+                var payUpdate = Builders<Order>.Update
+                    .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
+                    .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
+
+                if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
+                {
+                    payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
+                    order.RazorpayOrderId = razorResult.RazorpayOrderId;
+                    order.PaymentStatus = "Pending";
+                }
+                else
+                {
+                    order.PaymentStatus = "Failed";
+                }
+
+                await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
+
+                // ---- RESPONSE MAPPING (changed only to populate Id & OrderId correctly) ----
+                var responseDto = new CreateOrderResponse
+                {
+                    Success = razorResult.Success,
+                    Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
+                    OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
+                    RazorpayOrderId = razorResult.RazorpayOrderId,
+                    Total = order.Total,
+                    RazorpayDebug = razorResult,
+                    PaymentGatewayResponse = gatewayDebugJson
+                };
+
+                return responseDto;
+            }
+
+            // Non-razorpay path: return success wrapper
+            return new CreateOrderResponse
+            {
+                Success = true,
+                Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
+                OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
+                RazorpayOrderId = order.RazorpayOrderId,
+                Total = order.Total,
+                PaymentGatewayResponse = order.PaymentGatewayResponse
+            };
         }
+        catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            await session.AbortTransactionAsync();
+            if (attempt == maxAttempts) throw;
+            continue;
+        }
+        catch (Exception)
+        {
+            await session.AbortTransactionAsync();
+            await TryRollbackInventoryAsync(orderItems);
+            throw;
+        }
+    }
+
+    throw new InvalidOperationException("Failed to create order after retries.");
+}
         // helper: rollback inventory if needed (best-effort compensating update)
         private async Task TryRollbackInventoryAsync(IEnumerable<OrderItem> orderItems)
         {
