@@ -141,6 +141,9 @@ builder.Services.AddScoped<ReferralService>();
 builder.Services.AddScoped<IJobPostingRepository, JobPostingRepository>();
 builder.Services.AddScoped<IApplicantRepository, ApplicantRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
+builder.Services.AddScoped<ShoppingPlatform.Helpers.GiftCardHelper>();
+builder.Services.AddScoped<ShoppingPlatform.Helpers.PaymentHelper>();
+builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
 
 
 // Avoid duplicate registrations; add HttpClient for Razorpay
