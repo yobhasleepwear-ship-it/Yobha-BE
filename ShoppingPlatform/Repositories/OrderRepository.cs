@@ -10,12 +10,15 @@ using System.Threading.Tasks;
 using System.Diagnostics.Metrics;
 using ShoppingPlatform.Helpers;
 using Xunit.Sdk;
+using System.Text.RegularExpressions;
 
 namespace ShoppingPlatform.Repositories
 {
     public class OrderRepository : IOrderRepository
     {
         private readonly IMongoCollection<Product> _products;
+        private readonly IMongoCollection<CouponUsage> _couponUsages;
+        private readonly IMongoCollection<Coupon> _coupons;
         private readonly IMongoCollection<Order> _col;
         private readonly IMongoClient _mongoClient;
         private readonly IHttpClientFactory _httpClientFactory; // for delivery/payment calls
@@ -34,6 +37,8 @@ namespace ShoppingPlatform.Repositories
             _products = db.GetCollection<Product>("products");
             _col = db.GetCollection<Order>("orders");
             _counters = db.GetCollection<Counter>("counters");
+            _couponUsages = db.GetCollection<CouponUsage>("couponUsages");
+            _coupons = db.GetCollection<Coupon>("coupons");
             _mongoClient = mongoClient;
               _httpClientFactory = httpClientFactory;
             _giftCardHelper = giftCardHelper;
@@ -412,14 +417,75 @@ namespace ShoppingPlatform.Repositories
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(order.CouponCode))
-            {
-                var couponUpdate = Builders<Order>.Update
-                    .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
-                await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), couponUpdate);
-            }
+                    //if (!string.IsNullOrWhiteSpace(order.CouponCode))
+                    //{
+                    //    var coupon = _coupons
+                    //    var checkCouponisUsed = _couponUsages.coll
 
-            await session.CommitTransactionAsync();
+                    //    var couponUpdate = Builders<Order>.Update
+                    //        .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
+                    //    await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), couponUpdate);
+                    //}
+
+                    if (!string.IsNullOrWhiteSpace(order.CouponCode))
+                    {
+                        // 1) Find coupon by code (case-insensitive)
+                        var couponFilter = Builders<Coupon>.Filter.Regex(
+                            c => c.Code,
+                            new MongoDB.Bson.BsonRegularExpression($"^{Regex.Escape(order.CouponCode.Trim())}$", "i")
+                        );
+
+                        var coupon = await _coupons.Find(session, couponFilter).FirstOrDefaultAsync();
+                        if (coupon == null || !coupon.IsActive)
+                        {
+                            throw new InvalidOperationException("Coupon is invalid or not active.");
+                        }
+
+                        // 2) Check if user already used this coupon
+                        var usageFilter = Builders<CouponUsage>.Filter.And(
+                            Builders<CouponUsage>.Filter.Eq(u => u.CouponId, coupon.Id),
+                            Builders<CouponUsage>.Filter.Eq(u => u.UserId, userId)
+                        );
+
+                        var existingUsage = await _couponUsages.Find(session, usageFilter).FirstOrDefaultAsync();
+                        if (existingUsage != null)
+                        {
+                            throw new InvalidOperationException("Coupon has already been used by this user.");
+                        }
+
+                        // 3) Record usage and increment counters (within the same transaction session)
+                        // Insert CouponUsage record
+                        var couponUsage = new CouponUsage
+                        {
+                            CouponId = coupon.Id,
+                            UserId = userId,
+                            OrderId = order.Id,
+                            DiscountAmount = 0m, // frontend handles discount amount; store 0 or leave to later update if you prefer
+                            UsedAt = DateTime.UtcNow
+                        };
+                        await _couponUsages.InsertOneAsync(session, couponUsage);
+
+                        // Increment used count and push user id
+                        var couponUpdate = Builders<Coupon>.Update
+                            .Inc(c => c.UsedCount, 1)
+                            .AddToSet(c => c.UsedByUserIds, userId);
+
+                        await _coupons.UpdateOneAsync(session, Builders<Coupon>.Filter.Eq(c => c.Id, coupon.Id), couponUpdate);
+
+                        // Optionally set CouponId on order doc so it is recorded (if desired)
+                        var orderCouponUpdate = Builders<Order>.Update
+                            .Set(o => o.CouponId, coupon.Id)
+                            .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
+
+                        await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), orderCouponUpdate);
+
+                        // update in-memory order fields so later logic sees them (not required but convenient)
+                        order.CouponId = coupon.Id;
+                        order.CouponAppliedAt = DateTime.UtcNow;
+                    }
+
+
+                    await session.CommitTransactionAsync();
 
             if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
             {

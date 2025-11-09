@@ -44,6 +44,7 @@ namespace ShoppingPlatform.Controllers
             [FromQuery] decimal? minPrice = null,
             [FromQuery] decimal? maxPrice = null,
             [FromQuery] List<string>? fabric = null,
+            [FromQuery] List<string>? color = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20,
             [FromQuery] string? sort = "latest",

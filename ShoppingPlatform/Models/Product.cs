@@ -2,6 +2,7 @@
 using MongoDB.Bson.Serialization.Attributes;
 using System;
 using System.Collections.Generic;
+using System.Xml.Linq;
 
 namespace ShoppingPlatform.Models
 {
@@ -72,6 +73,7 @@ namespace ShoppingPlatform.Models
         // Analytics
         public long Views { get; set; } = 0;
         public long UnitsSold { get; set; } = 0;
+        public List<SuggestedProducts> SuggestedProducts { get; set; } = new();
     }
 
     public class InventoryItem
@@ -179,5 +181,12 @@ namespace ShoppingPlatform.Models
         public decimal? ShippingPrice { get; set; }
 
         public bool CashOnDelivery { get; set; } = false;
+    }
+    public class SuggestedProducts
+    {
+        public string? Id { get; set; }
+        public string? Name { get; set; }
+        public List<Price>? PriceList { get; set; }
+        public string? Image { get; set; }
     }
 }
