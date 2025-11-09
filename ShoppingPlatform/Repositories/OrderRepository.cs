@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Diagnostics.Metrics;
 using ShoppingPlatform.Helpers;
+using Xunit.Sdk;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -360,17 +361,44 @@ namespace ShoppingPlatform.Repositories
                     {
                         bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
 
-                        var razorOrderId = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+                        var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+
+                        // Save the raw gateway info for debugging (combine request+response)
+                        var gatewayDebug = new
+                        {
+                            Request = razorResult.RequestPayload,
+                            Response = razorResult.ResponseBody,
+                            StatusCode = razorResult.StatusCode,
+                            Error = razorResult.ErrorMessage
+                        };
+                        string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
 
                         var payUpdate = Builders<Order>.Update
-                            .Set(o => o.RazorpayOrderId, razorOrderId)
-                            .Set(o => o.PaymentStatus, "Pending");
+                            .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
+                            .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
+
+                        if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
+                        {
+                            payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
+                            order.RazorpayOrderId = razorResult.RazorpayOrderId;
+                            order.PaymentStatus = "Pending";
+                        }
+                        else
+                        {
+                            // keep PaymentStatus as Failed or Pending depending on your desired behaviour
+                            order.PaymentStatus = "Failed";
+                        }
 
                         await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
-                        order.RazorpayOrderId = razorOrderId;
-                        order.PaymentStatus = "Pending";
-                    }
 
+                        // If you want to stop the flow on Razorpay failure:
+                        if(!razorResult.Success)
+{
+                            var errorMsg = $"Razorpay order creation failed for OrderNumber: {order.OrderNumber}. Debug: {gatewayDebugJson}";
+                            //_log.LogError(errorMsg);
+                            throw new InvalidOperationException(errorMsg);
+                        }
+                    }
                     return order;
                 }
                 catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)

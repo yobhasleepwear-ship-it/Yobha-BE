@@ -62,4 +62,14 @@ namespace ShoppingPlatform.DTOs
 
     }
 
+    public class RazorpayOrderResult
+    {
+        public bool Success { get; set; }
+        public int StatusCode { get; set; }
+        public string RequestPayload { get; set; } = string.Empty;  // JSON sent to Razorpay
+        public string ResponseBody { get; set; } = string.Empty;    // raw body returned from Razorpay
+        public string? RazorpayOrderId { get; set; }                // the "id" from Razorpay if present
+        public string? ErrorMessage { get; set; }                   // friendly error if any
+    }
+
 }

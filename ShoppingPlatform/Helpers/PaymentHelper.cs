@@ -4,6 +4,7 @@ using System.Text;
 using ShoppingPlatform.Repositories;
 using Microsoft.Extensions.Caching.Memory;
 using ShoppingPlatform.Models;
+using ShoppingPlatform.DTOs;
 
 namespace ShoppingPlatform.Helpers
 {
@@ -24,17 +25,18 @@ namespace ShoppingPlatform.Helpers
 
         // Creates a razorpay order. Use environment var keys for security.
         // 'isInternational' flag toggles which key pair to use.
-        public async Task<string> CreateRazorpayOrderAsync(string orderId, decimal amount, string currency, bool isInternational = false)
+        public async Task<RazorpayOrderResult> CreateRazorpayOrderAsync(string orderId, decimal amount, string currency, bool isInternational = false)
         {
-            // Razorpay expects amount in paise if INR (i.e. multiply by 100). For other currencies the API doc varies.
-            // Use integer amount in smallest currency unit:
+            var result = new RazorpayOrderResult();
+
             long smallestUnit = ConvertToSmallestCurrencyUnit(amount, currency);
 
             var secrets = await GetRazorpaySecretsCachedAsync("RazorPay");
             if (secrets == null)
             {
                 _log.LogError("Razorpay secrets not found for '{AddedFor}'", "RazorPay");
-                throw new InvalidOperationException("Payment provider credentials are not configured.");
+                result.ErrorMessage = "Payment provider credentials are not configured.";
+                return result;
             }
 
             string? keyId = isInternational ? secrets.RAZOR_KEY_ID_INTL : secrets.RAZOR_KEY_ID_INR;
@@ -43,7 +45,8 @@ namespace ShoppingPlatform.Helpers
             if (string.IsNullOrWhiteSpace(keyId) || string.IsNullOrWhiteSpace(keySecret))
             {
                 _log.LogError("Razorpay keys are not configured correctly for '{AddedFor}' (intl={IsInt})", "RazorPay", isInternational);
-                throw new InvalidOperationException("Razorpay keys are not configured.");
+                result.ErrorMessage = "Razorpay keys are not configured.";
+                return result;
             }
 
             var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{keyId}:{keySecret}"));
@@ -53,27 +56,64 @@ namespace ShoppingPlatform.Helpers
                 amount = smallestUnit,
                 currency = currency,
                 receipt = orderId,
-                payment_capture = 1 // auto-capture; set 0 if you want manual capture
+                payment_capture = 1 // auto-capture
             };
+
+            var payloadString = JsonSerializer.Serialize(payload);
+            result.RequestPayload = payloadString;
 
             var request = new HttpRequestMessage(HttpMethod.Post, "https://api.razorpay.com/v1/orders")
             {
-                Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+                Content = new StringContent(payloadString, Encoding.UTF8, "application/json")
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", auth);
 
-            var resp = await _http.SendAsync(request);
+            HttpResponseMessage resp;
+            try
+            {
+                resp = await _http.SendAsync(request);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "HTTP request to Razorpay failed");
+                result.ErrorMessage = $"HTTP error: {ex.Message}";
+                return result;
+            }
+
             var body = await resp.Content.ReadAsStringAsync();
+            result.StatusCode = (int)resp.StatusCode;
+            result.ResponseBody = body;
 
             if (!resp.IsSuccessStatusCode)
             {
                 _log.LogError("Razorpay order creation failed: {Status} {Body}", resp.StatusCode, body);
-                throw new InvalidOperationException("Failed to create razorpay order");
+                result.ErrorMessage = $"Razorpay error: {resp.StatusCode}";
+                result.Success = false;
+                return result;
             }
 
-            using var doc = JsonDocument.Parse(body);
-            var razorOrderId = doc.RootElement.GetProperty("id").GetString() ?? throw new InvalidOperationException("Missing id in razor response");
-            return razorOrderId;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("id", out var idProp))
+                {
+                    result.RazorpayOrderId = idProp.GetString();
+                    result.Success = true;
+                }
+                else
+                {
+                    result.Success = false;
+                    result.ErrorMessage = "Razorpay response missing 'id'.";
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Failed to parse razorpay response JSON");
+                result.ErrorMessage = "Invalid JSON from Razorpay";
+                result.Success = false;
+            }
+
+            return result;
         }
         private async Task<RazorPaySecrets?> GetRazorpaySecretsCachedAsync(string addedFor)
         {
