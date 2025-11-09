@@ -21,7 +21,7 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal UnitPrice { get; set; }
         public List<string>? Fabric { get; set; }
-        public string? Color { get; set; }
+        public List<string>? Color { get; set; }
 
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal LineTotal { get; set; } // UnitPrice * Quantity (snapshot)
@@ -111,6 +111,12 @@ namespace ShoppingPlatform.Models
         public string? Email { get; set; }
 
         public string? orderCountry { get; set; }
+        public bool? isGiftWrap { get; set; }
+        public bool? delhiveryShipment { get; set; }
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal? shippingPrice { get; set; }
+
+        
     }
 
 

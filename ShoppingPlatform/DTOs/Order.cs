@@ -49,6 +49,9 @@ namespace ShoppingPlatform.DTOs
         public string? ShippingRemarks { get; set; }
         public string? Email { get; set; }
         public string? orderCountry { get; set; }
+        public bool? isGiftWrap { get; set; }
+        public bool? delhiveryShipment { get; set; }
+        public decimal? shippingPrice { get; set; }
 
     }
     public class ProductRequest
@@ -57,7 +60,7 @@ namespace ShoppingPlatform.DTOs
         public string Size { get; set; }
         public int Quantity { get; set; }
         public List<string>? Fabric { get; set; }
-        public string? Color { get; set; }
+        public List<string>? Color { get; set; }
         public string? Monogram { get; set; }
 
     }

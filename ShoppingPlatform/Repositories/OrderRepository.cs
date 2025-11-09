@@ -230,7 +230,14 @@ namespace ShoppingPlatform.Repositories
     {
                 Total +=( req.GiftCardAmount??0m);
     }
-
+            if (req.isGiftWrap==true)
+            {
+                Total += 500m;
+            }
+            if (req.shippingPrice != null && req.shippingPrice >= 0m)
+            {
+                Total += (req.shippingPrice??0m);
+            }
     // assemble basic order (OrderNumber and Id set inside transaction)
     var order = new Order
     {
@@ -254,6 +261,9 @@ namespace ShoppingPlatform.Repositories
         ShippingRemarks = req.ShippingRemarks,
         orderCountry = req.orderCountry,
         Email = req.Email,
+        isGiftWrap = req.isGiftWrap,
+        delhiveryShipment = req.delhiveryShipment,
+        shippingPrice = req.shippingPrice,
     };
 
     // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)
