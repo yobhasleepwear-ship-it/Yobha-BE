@@ -29,15 +29,25 @@ namespace ShoppingPlatform.Helpers
         {
             var result = new RazorpayOrderResult
             {
-                Success = false, // default to false — set true on success
+                Success = false,
                 StatusCode = 0,
                 RequestPayload = string.Empty,
-                ResponseBody = string.Empty
+                ResponseBody = string.Empty,
+                RazorpayOrderId = null,
+                ErrorMessage = null
             };
 
             // convert to smallest unit (paise for INR)
             long smallestUnit = ConvertToSmallestCurrencyUnit(amount, currency);
-            // Build payload
+
+            // Defensive check: Razorpay won't accept zero-amount orders. Return a clear debug result instead of throwing.
+            if (smallestUnit <= 0)
+            {
+                result.ErrorMessage = "Amount must be greater than zero for Razorpay orders.";
+                _log.LogWarning("Skipping Razorpay create for {OrderId} because smallestUnit={SmallestUnit}", orderId, smallestUnit);
+                return result;
+            }
+
             var payload = new
             {
                 amount = smallestUnit,
@@ -67,6 +77,9 @@ namespace ShoppingPlatform.Helpers
                 return result;
             }
 
+            // masked logging so you know keys are present without printing secrets
+            _log.LogInformation("Razorpay keys found (intl={IsInt}) for order {OrderId}", isInternational, orderId);
+
             var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{keyId}:{keySecret}"));
 
             var request = new HttpRequestMessage(HttpMethod.Post, "https://api.razorpay.com/v1/orders")
@@ -79,27 +92,35 @@ namespace ShoppingPlatform.Helpers
             HttpResponseMessage resp;
             try
             {
+                _log.LogDebug("Sending Razorpay order create request for {OrderId} payloadLen={PayloadLen}", orderId, payloadString?.Length ?? 0);
                 resp = await _http.SendAsync(request);
             }
             catch (Exception ex)
             {
                 _log.LogError(ex, "HTTP request to Razorpay failed for order {OrderId}", orderId);
                 result.ErrorMessage = $"HTTP error: {ex.Message}";
+                // keep ResponseBody empty (no response) but return the error for debug
                 return result;
             }
 
             var body = await resp.Content.ReadAsStringAsync();
             result.StatusCode = (int)resp.StatusCode;
-            result.ResponseBody = body;
+            result.ResponseBody = body ?? string.Empty;
+
+            // always log the raw response body at debug level (truncated)
+            _log.LogDebug("Razorpay response for {OrderId} status={Status} bodyLen={Len} bodyPreview={Preview}",
+                orderId, resp.StatusCode, result.ResponseBody.Length, result.ResponseBody.Length > 400 ? result.ResponseBody.Substring(0, 400) : result.ResponseBody);
 
             if (!resp.IsSuccessStatusCode)
             {
-                _log.LogError("Razorpay order creation failed: {Status} {Body}", resp.StatusCode, body);
-                result.ErrorMessage = $"Razorpay error: {(int)resp.StatusCode}";
+                // give the caller more context (status + body)
+                _log.LogError("Razorpay order creation failed for {OrderId}: {Status} {Body}", orderId, resp.StatusCode, result.ResponseBody);
+                result.ErrorMessage = $"Razorpay error: {(int)resp.StatusCode} - {Truncate(result.ResponseBody, 1000)}";
                 result.Success = false;
                 return result;
             }
 
+            // parse success response
             try
             {
                 using var doc = JsonDocument.Parse(body);
@@ -107,11 +128,13 @@ namespace ShoppingPlatform.Helpers
                 {
                     result.RazorpayOrderId = idProp.GetString();
                     result.Success = true;
+                    _log.LogInformation("Razorpay order created for {OrderId} razorId={RazorId}", orderId, result.RazorpayOrderId);
                 }
                 else
                 {
                     result.Success = false;
                     result.ErrorMessage = "Razorpay response missing 'id'.";
+                    _log.LogWarning("Razorpay response for {OrderId} missing 'id' property", orderId);
                 }
             }
             catch (Exception ex)
@@ -122,6 +145,13 @@ namespace ShoppingPlatform.Helpers
             }
 
             return result;
+        }
+
+        // helper to truncate long debug strings
+        private static string Truncate(string? value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            return value.Length <= maxLength ? value : value.Substring(0, maxLength) + "...";
         }
         private async Task<RazorPaySecrets?> GetRazorpaySecretsCachedAsync(string addedFor)
         {
@@ -134,6 +164,8 @@ namespace ShoppingPlatform.Helpers
             if (secretsDoc == null || secretsDoc.razorPaySecrets == null)
                 return null;
 
+            // cache for 10 minutes (adjust as needed)
+            _cache.Set(cacheKey, secretsDoc.razorPaySecrets, TimeSpan.FromMinutes(10));
             return secretsDoc.razorPaySecrets;
         }
 
