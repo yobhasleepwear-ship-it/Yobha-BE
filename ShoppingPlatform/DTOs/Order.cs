@@ -74,8 +74,10 @@ namespace ShoppingPlatform.DTOs
 
     public class CreateOrderResponse
     {
+        public string Id { get; set; }    // add this line
         public bool Success { get; set; }
         public string OrderId { get; set; } = string.Empty;
+        //public string OrderNumber { get; set; }
         public string? RazorpayOrderId { get; set; }
         public decimal Total { get; set; }
         // full debug object returned from the payment helper
