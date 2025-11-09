@@ -24,7 +24,7 @@ namespace ShoppingPlatform.Repositories
         // QueryAsync
         // -----------------------
         public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(string? q, string? category, string? subCategory,
-            decimal? minPrice, decimal? maxPrice, int page, int pageSize, string? sort)
+            decimal? minPrice, decimal? maxPrice,List<string>? fabric, int page, int pageSize, string? sort)
         {
             var filters = new List<FilterDefinition<Product>>();
             var builder = Builders<Product>.Filter;
@@ -58,6 +58,12 @@ namespace ShoppingPlatform.Repositories
                 var subCat = subCategory.Trim();
                 var subCatFilter = builder.Eq(p => p.ProductCategory, subCat);
                 filters.Add(subCatFilter);
+            }
+
+            if (fabric != null && fabric.Any())
+            {
+                var fabricfilter = builder.AnyIn(p => p.FabricType, fabric);
+                filters.Add(fabricfilter);
             }
 
             var combinedFilter = filters.Count > 0 ? builder.And(filters) : builder.Empty;

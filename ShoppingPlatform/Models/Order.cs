@@ -20,6 +20,8 @@ namespace ShoppingPlatform.Models
         // store money as Decimal128
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal UnitPrice { get; set; }
+        public List<string>? Fabric { get; set; }
+        public string? Color { get; set; }
 
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal LineTotal { get; set; } // UnitPrice * Quantity (snapshot)
@@ -28,6 +30,12 @@ namespace ShoppingPlatform.Models
 
         // Snapshot UI fields
         public string? ThumbnailUrl { get; set; }
+
+        public bool? IsReturned { get; set; }
+        public string? ReasonForReturn { get; set; }
+        public string? ReturnStatus { get; set; }
+        public string? AdminRemarks { get; set;  } 
+        public string? Monogram { get; set; }
     }
 
     public class Order
@@ -38,7 +46,7 @@ namespace ShoppingPlatform.Models
         
         public string OrderNumber { get; set; } = string.Empty;
         public string UserId { get; set; } = string.Empty;
-        public List<OrderItem> Items { get; set; } = new();
+        public List<OrderItem>? Items { get; set; } = new();
 
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal SubTotal { get; set; }
@@ -66,6 +74,21 @@ namespace ShoppingPlatform.Models
         public DateTime? CouponAppliedAt { get; set; }     // when coupon was applied to this order
         public bool CouponUsageRecorded { get; set; } = false; // set true after payment success & MarkUsed called
 
+
+        //Gift Card details
+        public string? GiftCardNumber { get; set; }
+
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal? GiftCardAmount { get; set; }
+
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string? GiftCardId { get; set; }            // link to GiftCards collection (if created or used)\
+
+        [BsonRepresentation(BsonType.Decimal128)]
+        public decimal? GiftCardAppliedAmount { get; set; } // amount actually applied to this order
+        public DateTime? GiftCardAppliedAt { get; set; }   // when the gift card was applied
+
+
         // Payment metadata
         public string PaymentMethod { get; set; } = "COD"; // "COD" or "razorpay"
         public string PaymentStatus { get; set; } = "Pending"; // Pending, Confirmed, Paid, Failed
@@ -84,6 +107,8 @@ namespace ShoppingPlatform.Models
         public string? ShippingTrackingId { get; set; }      // partner tracking id
         public DateTime? ShippedAt { get; set; }
         public string? ShippingPartnerResponse { get; set; } // raw response for debugging
+        public string? ShippingRemarks { get; set; }
+        public string? orderCountry { get; set; }
     }
 
 

@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text;
 using System.Threading.Tasks;
 using System.Diagnostics.Metrics;
+using ShoppingPlatform.Helpers;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -18,20 +19,25 @@ namespace ShoppingPlatform.Repositories
         private readonly IMongoClient _mongoClient;
         private readonly IHttpClientFactory _httpClientFactory; // for delivery/payment calls
         private readonly IMongoCollection<Counter> _counters;
-        private readonly string _razorpayKey; // from config
-        private readonly string _blueDartUrl; // from config
+        private readonly GiftCardHelper _giftCardHelper;
+        private readonly PaymentHelper _paymentHelper;
+        //private readonly IMongoCollection<GiftCard> _giftCardCollection;
 
 
         public OrderRepository(IMongoDatabase db, IMongoClient mongoClient, IHttpClientFactory httpClientFactory,
-        IConfiguration configuration)
+        IConfiguration configuration,GiftCardHelper giftCardHelper,
+                        PaymentHelper paymentHelper
+                        //,IMongoCollection<GiftCard> giftCardCollection
+            )
         {
             _products = db.GetCollection<Product>("products");
             _col = db.GetCollection<Order>("orders");
             _counters = db.GetCollection<Counter>("counters");
             _mongoClient = mongoClient;
               _httpClientFactory = httpClientFactory;
-        _razorpayKey = configuration["Razorpay:Key"] ?? "";
-        _blueDartUrl = configuration["BlueDart:Url"] ?? "";
+            _giftCardHelper = giftCardHelper;
+            _paymentHelper = paymentHelper;
+            //_giftCardCollection = giftCardCollection;
         }
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
@@ -142,74 +148,79 @@ namespace ShoppingPlatform.Repositories
         public async Task<Order> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
         {
             if (req == null) throw new ArgumentNullException(nameof(req));
-            if (req.productRequests == null || !req.productRequests.Any())
-                throw new ArgumentException("productRequests cannot be empty");
+            if (req.productRequests == null) req.productRequests = new List<ProductRequest>();
 
-            // 1) fetch product docs by readable product id
-            var productIds = req.productRequests.Select(p => p.id).Distinct().ToList();
-            var filter = Builders<Product>.Filter.In(p => p.ProductId, productIds);
-            var products = await _products.Find(filter).ToListAsync();
-
-            if (products.Count != productIds.Count)
+            // Basic validation
+            if (string.IsNullOrWhiteSpace(req.Currency)) throw new ArgumentException("Currency required");
+            if (req.ShippingAddress == null && (req.productRequests == null || !req.productRequests.Any()))
             {
-                var missing = productIds.Except(products.Select(p => p.ProductId));
-                throw new InvalidOperationException($"Products not found: {string.Join(',', missing)}");
+                // allow empty shipping address only if buying gift card
+                if (req.GiftCardAmount == null) throw new ArgumentException("ShippingAddress required for non-gift-card orders");
             }
 
-            // 2) build order items, validate price/stock
+            // resolve products only if there are items
             var orderItems = new List<OrderItem>();
-            foreach (var pr in req.productRequests)
+            List<Product> products = new List<Product>();
+            if (req.productRequests.Any())
             {
-                var prod = products.Single(p => p.ProductId == pr.id);
+                var productIds = req.productRequests.Select(p => p.id).Distinct().ToList();
+                var filter = Builders<Product>.Filter.In(p => p.ProductId, productIds);
+                products = await _products.Find(filter).ToListAsync();
 
-                var priceEntry = prod.PriceList.FirstOrDefault(px =>
-                    string.Equals(px.Size, pr.Size, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(px.Currency, req.Currency, StringComparison.OrdinalIgnoreCase));
-
-                if (priceEntry == null)
-                    throw new InvalidOperationException($"Price not found for product {pr.id}, size {pr.Size}, currency {req.Currency}");
-
-                // prefer quantity from request if present, otherwise default 1
-                int qty = 1;
-                if (pr.GetType().GetProperty("Quantity") != null)
-                    qty = (int?)pr.GetType().GetProperty("Quantity")!.GetValue(pr) ?? 1;
-                if (qty <= 0) qty = 1;
-
-                if (priceEntry.Quantity < qty)
-                    throw new InvalidOperationException($"Insufficient stock for product {pr.id}, size {pr.Size}");
-
-                var unitPrice = priceEntry.PriceAmount;
-                var lineTotal = unitPrice * qty;
-
-                orderItems.Add(new OrderItem
+                if (products.Count != productIds.Count)
                 {
-                    ProductId = prod.ProductId,
-                    ProductObjectId = prod.Id,
-                    ProductName = prod.Name,
-                    Quantity = qty,
-                    Size = pr.Size,
-                    UnitPrice = unitPrice,
-                    LineTotal = lineTotal,
-                    Currency = priceEntry.Currency,
-                    ThumbnailUrl = prod.Images?.FirstOrDefault()?.ThumbnailUrl
-                });
+                    var missing = productIds.Except(products.Select(p => p.ProductId));
+                    throw new InvalidOperationException($"Products not found: {string.Join(',', missing)}");
+                }
+
+                foreach (var pr in req.productRequests)
+                {
+                    var prod = products.Single(p => p.ProductId == p.Id);
+
+                    var priceEntry = prod.PriceList.FirstOrDefault(px =>
+                        string.Equals(px.Size, pr.Size, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(px.Currency, req.Currency, StringComparison.OrdinalIgnoreCase));
+
+                    if (priceEntry == null) throw new InvalidOperationException($"Price not found for product {pr.id}, size {pr.Size}, currency {req.Currency}");
+
+                    int qty = pr.Quantity > 0 ? pr.Quantity : 1;
+                    if (priceEntry.Quantity < qty) throw new InvalidOperationException($"Insufficient stock for product {pr.id}");
+
+                    decimal unitPrice = priceEntry.PriceAmount;
+                    decimal lineTotal = unitPrice * qty;
+
+                    orderItems.Add(new OrderItem
+                    {
+                        ProductId = prod.ProductId,
+                        ProductObjectId = prod.Id,
+                        ProductName = prod.Name,
+                        Quantity = qty,
+                        Size = pr.Size,
+                        Fabric = pr.Fabric,
+                        Color = pr.Color,
+                        UnitPrice = unitPrice,
+                        LineTotal = lineTotal,
+                        Currency = priceEntry.Currency,
+                        ThumbnailUrl = prod.Images?.FirstOrDefault()?.ThumbnailUrl,
+                        Monogram = pr.Monogram
+                    });
+                }
             }
 
-            // 3) compute subtotal and apply discounts
+            // compute totals
             decimal subtotal = orderItems.Sum(i => i.LineTotal);
             decimal couponDiscount = req.CouponDiscount ?? 0m;
             decimal loyaltyDiscount = req.LoyaltyDiscountAmount ?? 0m;
-
             decimal discountTotal = couponDiscount + loyaltyDiscount;
+
             if (discountTotal > subtotal) discountTotal = subtotal;
 
-            decimal shipping = 0m; // compute shipping as per rules
-            decimal tax = 0m; // compute taxes
+            decimal shipping = 0m; // compute shipping rules
+            decimal tax = 0m;
+            decimal totalBeforeGiftCard = subtotal + shipping + tax - discountTotal;
+            if (totalBeforeGiftCard < 0) totalBeforeGiftCard = 0m;
 
-            decimal total = subtotal + shipping + tax - discountTotal;
-            if (total < 0) total = 0m;
-
-            // 4) assemble order document (OrderNumber will be set inside transaction)
+            // assemble basic order (OrderNumber and Id set inside transaction)
             var order = new Order
             {
                 UserId = userId,
@@ -218,7 +229,7 @@ namespace ShoppingPlatform.Repositories
                 Shipping = shipping,
                 Tax = tax,
                 Discount = discountTotal,
-                Total = total,
+                Total = totalBeforeGiftCard, // might change if gift card applied
                 Currency = req.Currency,
                 ShippingAddress = req.ShippingAddress,
                 LoyaltyDiscountAmount = req.LoyaltyDiscountAmount,
@@ -226,155 +237,233 @@ namespace ShoppingPlatform.Repositories
                 PaymentMethod = req.PaymentMethod ?? "COD",
                 PaymentStatus = "Pending",
                 Status = "Pending",
-                CreatedAt = DateTime.UtcNow
+                CreatedAt = DateTime.UtcNow,
+                GiftCardNumber = req.GiftCardNumber,
+                GiftCardAmount = req.GiftCardAmount,
+                ShippingRemarks = req.ShippingRemarks,
             };
 
-            // ---- Attempt loop: try a few times in case of extremely rare duplicate key races ----
+            // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)
+            if (!order.Items.Any() && order.GiftCardAmount.HasValue && string.IsNullOrWhiteSpace(order.GiftCardNumber))
+            {  
+                using var session = await _mongoClient.StartSessionAsync();
+                session.StartTransaction();
+                try
+                {
+                    var fiscal = GetFiscalYearString(DateTime.UtcNow);
+                    var seq = await GetNextOrderSequenceAsync(fiscal, session);
+                    order.OrderNumber = $"ORD{fiscal}{seq:D8}";
+
+                    await _col.InsertOneAsync(session, order);
+
+                    var giftCard = await _giftCardHelper.CreateGiftCardAsync(session, order.GiftCardAmount.Value, order.Currency, order.Id, userId);
+
+                    var update = Builders<Order>.Update
+                        .Set(o => o.GiftCardId, giftCard.Id)
+                        .Set(o => o.GiftCardNumber, giftCard.GiftCardNumber);
+                    await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), update);
+
+                    await session.CommitTransactionAsync();
+
+                    order.GiftCardId = giftCard.Id;
+                    order.GiftCardNumber = giftCard.GiftCardNumber;
+                    return order;
+                }
+                catch (Exception)
+                {
+                    await session.AbortTransactionAsync();
+                    throw;
+                }
+            }
+
+            // Common path
             const int maxAttempts = 3;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 using var session = await _mongoClient.StartSessionAsync();
                 session.StartTransaction();
-
                 try
                 {
-                    // determine fiscal (e.g. "2526"), and increment single ORD counter under seqs.<fiscal>
-                    var fiscal = GetFiscalYearString(DateTime.UtcNow); // helper below
-                    var seq = await GetNextOrderSequenceAsync(fiscal, session); // helper below (uses _counters doc with _id = "ORD")
+                    var fiscal = GetFiscalYearString(DateTime.UtcNow);
+                    var seq = await GetNextOrderSequenceAsync(fiscal, session);
+                    order.OrderNumber = $"ORD{fiscal}{seq:D8}";
 
-                    // compose order number (user requested form like ORD25260000001)
-                    order.OrderNumber = $"ORD{fiscal}{seq:D8}"; // D8 padding -> ORD25260000001 for seq=1
-
-                    // extra-safety: check if an order already exists with the same OrderNumber (should be extremely rare)
-                    var exists = await _col.Find(session, Builders<Order>.Filter.Eq(o => o.OrderNumber, order.OrderNumber))
-                                           .FirstOrDefaultAsync();
-
-                    if (exists != null)
-                    {
-                        // conflict — abort and try again (new seq next attempt)
-                        await session.AbortTransactionAsync();
-                        // no inventory decremented yet; just retry
-                        continue;
-                    }
-
-                    // insert order (with generated OrderNumber)
                     await _col.InsertOneAsync(session, order);
 
-                    // decrement inventory for each item using same session
                     foreach (var oi in orderItems)
                     {
                         var prodFilter = Builders<Product>.Filter.And(
                             Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId),
                             Builders<Product>.Filter.ElemMatch(p => p.PriceList,
-                                pr => pr.Size == oi.Size &&
-                                      pr.Currency == oi.Currency &&
-                                      pr.Quantity >= oi.Quantity)
+                                pr => pr.Size == oi.Size && pr.Currency == oi.Currency && pr.Quantity >= oi.Quantity)
                         );
 
-                        var update = Builders<Product>.Update.Inc("Prices.$[elem].Quantity", -oi.Quantity)
-                                                               .Inc("UpdatedAt", 0);
+                        var update = Builders<Product>.Update
+                            .Inc($"{"PriceList"}.$[elem].Quantity", -oi.Quantity)
+                            .Set(p => p.UpdatedAt, DateTime.UtcNow);
 
                         var updateOptions = new UpdateOptions
                         {
                             ArrayFilters = new List<ArrayFilterDefinition>
                     {
                         new BsonDocumentArrayFilterDefinition<BsonDocument>(
-                            new BsonDocument("elem.Size", oi.Size).Add("elem.Currency", oi.Currency))
+                            new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
                     }
                         };
 
                         var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
-
                         if (result.ModifiedCount == 0)
                         {
+                            await session.AbortTransactionAsync();
                             throw new InvalidOperationException($"Concurrent stock update prevented decrement for product {oi.ProductId}");
                         }
                     }
 
-                    // persist coupon applied timestamp if applicable
+                    // Apply gift card if provided
+                    if (!string.IsNullOrWhiteSpace(req.GiftCardNumber))
+                    {
+                        var currentTotal = order.Total;
+                        if (currentTotal > 0)
+                        {
+                            var deductionResult = await _giftCardHelper.ApplyGiftCardAsync(session, req.GiftCardNumber.Trim(), currentTotal, order.Currency);
+
+                            var orderUpdate = Builders<Order>.Update
+                                .Set(o => o.GiftCardNumber, req.GiftCardNumber.Trim())
+                                .Set(o => o.GiftCardAppliedAmount, deductionResult.Deducted)
+                                .Set(o => o.GiftCardId, deductionResult.GiftCardId)
+                                .Set(o => o.GiftCardAppliedAt, DateTime.UtcNow)
+                                .Inc(o => o.Total, -deductionResult.Deducted);
+
+                            await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), orderUpdate);
+
+                            order.GiftCardAppliedAmount = deductionResult.Deducted;
+                            order.GiftCardId = deductionResult.GiftCardId;
+                            order.GiftCardNumber = req.GiftCardNumber.Trim();
+                            order.GiftCardAppliedAt = DateTime.UtcNow;
+                            order.Total -= deductionResult.Deducted;
+                            if (order.Total < 0) order.Total = 0m;
+                        }
+                    }
+
                     if (!string.IsNullOrWhiteSpace(order.CouponCode))
                     {
-                        order.CouponAppliedAt = DateTime.UtcNow;
-                        await _col.ReplaceOneAsync(session,
-                            Builders<Order>.Filter.Eq(o => o.Id, order.Id),
-                            order);
+                        var couponUpdate = Builders<Order>.Update
+                            .Set(o => o.CouponAppliedAt, DateTime.UtcNow);
+                        await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), couponUpdate);
                     }
 
                     await session.CommitTransactionAsync();
 
-                    // success: break attempt loop and continue to payment branch below
-                    break;
+                    if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
+
+                        var razorOrderId = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+
+                        var payUpdate = Builders<Order>.Update
+                            .Set(o => o.RazorpayOrderId, razorOrderId)
+                            .Set(o => o.PaymentStatus, "Pending");
+
+                        await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
+                        order.RazorpayOrderId = razorOrderId;
+                        order.PaymentStatus = "Pending";
+                    }
+
+                    return order;
                 }
                 catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
                 {
-                    // Duplicate key on insert (very rare): abort and retry another seq
                     await session.AbortTransactionAsync();
-                    await TryRollbackInventory(orderItems);
                     if (attempt == maxAttempts) throw;
-                    // otherwise loop to retry
                     continue;
                 }
                 catch (Exception)
                 {
                     await session.AbortTransactionAsync();
-                    await TryRollbackInventory(orderItems);
+                    await TryRollbackInventoryAsync(orderItems);
                     throw;
                 }
-            } // end attempts
-
-            // 6) Payment integration branch (same as before)
-            if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
-            {
-                var razorOrderId = await CreateRazorpayOrder(order);
-                order.RazorpayOrderId = razorOrderId;
-                order.PaymentStatus = "Pending";
-                await _col.ReplaceOneAsync(o => o.Id == order.Id, order);
             }
 
-            return order;
+            throw new InvalidOperationException("Failed to create order after retries.");
+        }
+        // helper: rollback inventory if needed (best-effort compensating update)
+        private async Task TryRollbackInventoryAsync(IEnumerable<OrderItem> orderItems)
+        {
+            // Attempt to restore stock levels if a transaction failed after partial updates
+            foreach (var oi in orderItems)
+            {
+                try
+                {
+                    var prodFilter = Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId);
+
+                    var update = Builders<Product>.Update
+                        .Inc("PriceList.$[elem].Quantity", oi.Quantity)
+                        .Set(p => p.UpdatedAt, DateTime.UtcNow);
+
+                    var updateOptions = new UpdateOptions
+                    {
+                        ArrayFilters = new List<ArrayFilterDefinition>
+                {
+                    new BsonDocumentArrayFilterDefinition<BsonDocument>(
+                        new BsonDocument
+                        {
+                            { "elem.Size", oi.Size },
+                            { "elem.Currency", oi.Currency }
+                        })
+                }
+                    };
+
+                    var result = await _products.UpdateOneAsync(prodFilter, update, updateOptions);
+
+                    if (result.ModifiedCount == 0)
+                        throw new InvalidOperationException($"Rollback failed — product {oi.ProductObjectId} not updated (Size={oi.Size}, Currency={oi.Currency}).");
+                }
+                catch (Exception ex)
+                {
+                    // Re-throw detailed rollback error to bubble up to upper layers
+                    throw new Exception($"Rollback inventory failed for product {oi.ProductObjectId}", ex);
+                }
+            }
         }
 
 
-        // fiscal year helper (same as before)
-        private string GetFiscalYearString(DateTime dtUtc)
+        // stub: produce fiscal string "2526" for FY 2025-26 for example
+        private string GetFiscalYearString(DateTime dt)
         {
-            int startYear = (dtUtc.Month >= 4) ? dtUtc.Year : dtUtc.Year - 1;
-            var a = (startYear % 100).ToString("D2");
-            var b = ((startYear + 1) % 100).ToString("D2");
-            return a + b; // e.g. "2526"
+            // Implement your fiscal logic here (example: FY starting Apr 1)
+            var year = dt.Month >= 4 ? dt.Year % 100 : (dt.Year - 1) % 100;
+            var next = (year + 1) % 100;
+            // e.g. year=25,next=26 => "2526"
+            return $"{year:D2}{next:D2}";
         }
 
-        // Single-counter (ORD) helper using dynamic nested field seqs.<fiscal>
-        // NOTE: this uses _counters collection which must be initialized in your constructor:
-        // _counters = db.GetCollection<BsonDocument>("counters");
-        private async Task<long> GetNextOrderSequenceAsync(string fiscal, IClientSessionHandle? session = null)
+        // stub: increment sequence doc in _counters collection atomically; return sequence number
+        private async Task<long> GetNextOrderSequenceAsync(string fiscal, IClientSessionHandle session)
         {
-            // Counter ID pattern per fiscal year
-            var counterId = $"ORD";
+            if (session == null) throw new ArgumentNullException(nameof(session));
 
-            var filter = Builders<Counter>.Filter.Eq(c => c.CounterFor, counterId);
+            var key = $"ORD_{fiscal}";
+
+            // typed filter & update
+            var filter = Builders<Counter>.Filter.Eq(c => c.Id, key);
             var update = Builders<Counter>.Update.Inc(c => c.Seq, 1);
 
-            // We want the previous value before incrementing, so we can return new sequence safely
             var options = new FindOneAndUpdateOptions<Counter>
             {
                 IsUpsert = true,
-                ReturnDocument = ReturnDocument.Before
+                ReturnDocument = ReturnDocument.After
             };
 
-            Counter? result;
+            var doc = await _counters.FindOneAndUpdateAsync(session, filter, update, options);
+            if (doc == null)
+            {
+                // This should not happen when upsert = true, but guard just in case
+                throw new InvalidOperationException($"Failed to obtain sequence for {key}");
+            }
 
-            if (session != null)
-                result = await _counters.FindOneAndUpdateAsync(session, filter, update, options);
-            else
-                result = await _counters.FindOneAndUpdateAsync(filter, update, options);
-
-            long previousValue = result?.Seq ?? 0;
-
-            // Return the new value after increment
-            return previousValue + 1;
+            return doc.Seq;
         }
-
 
 
 
@@ -418,58 +507,58 @@ namespace ShoppingPlatform.Repositories
             return null;
         }
 
-        public async Task CreateShipmentWithBlueDartAsync(Order order)
-        {
-            // call BlueDart API only after order paid (or per your business rules)
-            // build payload using order.ShippingAddress and order.Items
-            var client = _httpClientFactory.CreateClient();
-            var dto = new
-            {
-                consignor = new { /* your account details */ },
-                consignee = new
-                {
-                    name = order.ShippingAddress?.FullName,
-                    phone = order.ShippingAddress?.MobileNumner,
-                    address = order.ShippingAddress?.Line1,
-                    city = order.ShippingAddress?.City,
-                    pincode = order.ShippingAddress?.Zip,
-                },
-                parcels = order.Items.Select(i => new { name = i.ProductName, quantity = i.Quantity, value = i.LineTotal }).ToList()
-            };
+        //public async Task CreateShipmentWithBlueDartAsync(Order order)
+        //{
+        //    // call BlueDart API only after order paid (or per your business rules)
+        //    // build payload using order.ShippingAddress and order.Items
+        //    var client = _httpClientFactory.CreateClient();
+        //    var dto = new
+        //    {
+        //        consignor = new { /* your account details */ },
+        //        consignee = new
+        //        {
+        //            name = order.ShippingAddress?.FullName,
+        //            phone = order.ShippingAddress?.MobileNumner,
+        //            address = order.ShippingAddress?.Line1,
+        //            city = order.ShippingAddress?.City,
+        //            pincode = order.ShippingAddress?.Zip,
+        //        },
+        //        parcels = order.Items.Select(i => new { name = i.ProductName, quantity = i.Quantity, value = i.LineTotal }).ToList()
+        //    };
 
-            var json = JsonSerializer.Serialize(dto);
-            var req = new HttpRequestMessage(HttpMethod.Post, _blueDartUrl + "/createShipment")
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
+        //    var json = JsonSerializer.Serialize(dto);
+        //    var req = new HttpRequestMessage(HttpMethod.Post, _blueDartUrl + "/createShipment")
+        //    {
+        //        Content = new StringContent(json, Encoding.UTF8, "application/json")
+        //    };
 
-            // add auth headers as BlueDart requires
-            var resp = await client.SendAsync(req);
-            var text = await resp.Content.ReadAsStringAsync();
+        //    // add auth headers as BlueDart requires
+        //    var resp = await client.SendAsync(req);
+        //    var text = await resp.Content.ReadAsStringAsync();
 
-            if (resp.IsSuccessStatusCode)
-            {
-                // parse tracking id and update order
-                var trackingId = ExtractTrackingFromResponse(text);
-                var update = Builders<Order>.Update
-                    .Set(o => o.ShippingPartner, "BlueDart")
-                    .Set(o => o.ShippingTrackingId, trackingId)
-                    .Set(o => o.ShippingPartnerResponse, text)
-                    .Set(o => o.UpdatedAt, DateTime.UtcNow);
+        //    if (resp.IsSuccessStatusCode)
+        //    {
+        //        // parse tracking id and update order
+        //        var trackingId = ExtractTrackingFromResponse(text);
+        //        var update = Builders<Order>.Update
+        //            .Set(o => o.ShippingPartner, "BlueDart")
+        //            .Set(o => o.ShippingTrackingId, trackingId)
+        //            .Set(o => o.ShippingPartnerResponse, text)
+        //            .Set(o => o.UpdatedAt, DateTime.UtcNow);
 
-                await _col.UpdateOneAsync(o => o.Id == order.Id, update);
-            }
-            else
-            {
-                // log the error for manual retry
-                //_logger.LogError("BlueDart create shipment failed: {Response}", text);
-                // optionally persist response for debugging
-                var update = Builders<Order>.Update
-                    .Set(o => o.ShippingPartnerResponse, text)
-                    .Set(o => o.UpdatedAt, DateTime.UtcNow);
-                await _col.UpdateOneAsync(o => o.Id == order.Id, update);
-            }
-        }
+        //        await _col.UpdateOneAsync(o => o.Id == order.Id, update);
+        //    }
+        //    else
+        //    {
+        //        // log the error for manual retry
+        //        //_logger.LogError("BlueDart create shipment failed: {Response}", text);
+        //        // optionally persist response for debugging
+        //        var update = Builders<Order>.Update
+        //            .Set(o => o.ShippingPartnerResponse, text)
+        //            .Set(o => o.UpdatedAt, DateTime.UtcNow);
+        //        await _col.UpdateOneAsync(o => o.Id == order.Id, update);
+        //    }
+        //}
 
         private string? ExtractTrackingFromResponse(string text)
         {

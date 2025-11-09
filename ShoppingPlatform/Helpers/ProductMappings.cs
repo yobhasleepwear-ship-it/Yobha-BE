@@ -24,19 +24,19 @@ namespace ShoppingPlatform.Helpers
                 if (prices.Count > 0) return prices.Min();
             }
 
-            if (!string.IsNullOrWhiteSpace(country) && p.CountryPrices != null && p.CountryPrices.Count > 0)
-            {
-                var match = p.CountryPrices.FirstOrDefault(cp => string.Equals(cp.Country?.Trim(), country.Trim(), StringComparison.OrdinalIgnoreCase));
-                if (match != null && match.PriceAmount > 0) return match.PriceAmount;
-            }
+            //if (!string.IsNullOrWhiteSpace(country) && p.CountryPrices != null && p.CountryPrices.Count > 0)
+            //{
+            //    var match = p.CountryPrices.FirstOrDefault(cp => string.Equals(cp.Country?.Trim(), country.Trim(), StringComparison.OrdinalIgnoreCase));
+            //    if (match != null && match.PriceAmount > 0) return match.PriceAmount;
+            //}
 
-            if (p.CountryPrices != null && p.CountryPrices.Count > 0)
-            {
-                var candidate = p.CountryPrices.Select(cp => cp.PriceAmount).Where(v => v > 0).DefaultIfEmpty(0m).Min();
-                if (candidate > 0) return candidate;
-            }
+            //if (p.CountryPrices != null && p.CountryPrices.Count > 0)
+            //{
+            //    var candidate = p.CountryPrices.Select(cp => cp.PriceAmount).Where(v => v > 0).DefaultIfEmpty(0m).Min();
+            //    if (candidate > 0) return candidate;
+            //}
 
-            if (p.Price > 0) return p.Price;
+            //if (p.Price > 0) return p.Price;
 
             return 0m;
         }

@@ -35,21 +35,28 @@ namespace ShoppingPlatform.DTOs
 
     public class CreateOrderRequestV2
     {
-        public string Currency { get; set; }
-        public List<ProductRequest> productRequests { get; set; }
-        public Address ShippingAddress { get; set; }
-        public string PaymentMethod { get; set; } // "COD" or "razorpay"
+        public string Currency { get; set; } = string.Empty;
+        public List<ProductRequest> productRequests { get; set; } = new();
+        public Address ShippingAddress { get; set; } = null!;
+        public string PaymentMethod { get; set; } = "COD"; // "COD" or "razorpay"
         public string? CouponCode { get; set; }
         public decimal? CouponDiscount { get; set; }
+        public decimal? LoyaltyDiscountAmount { get; set; } // points to amount calculations at frontend
 
-        public decimal? LoyaltyDiscountAmount { get; set; }// points to amount calcualtions at frontend
+        // optional gift card fields (if the client sends them)
+        public string? GiftCardNumber { get; set; }
+        public decimal? GiftCardAmount { get; set; }
+        public string? ShippingRemarks { get; set; }
+
     }
-
     public class ProductRequest
     { 
         public string id { get; set; }
         public string Size { get; set; }
         public int Quantity { get; set; }
+        public List<string>? Fabric { get; set; }
+        public string? Color { get; set; }
+        public string? Monogram { get; set; }
 
     }
 
