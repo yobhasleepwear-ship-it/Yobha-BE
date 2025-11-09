@@ -89,7 +89,8 @@ namespace ShoppingPlatform.Helpers
                 ProductMainCategory = p.ProductMainCategory ?? string.Empty,
                 AvailableColors = availableColors,
                 AvailableSizes = availableSizes,
-                PriceList = p.PriceList
+                PriceList = p.PriceList,
+                SuggestedProducts = p.SuggestedProducts
             };
         }
 

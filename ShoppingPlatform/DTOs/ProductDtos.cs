@@ -21,6 +21,8 @@ namespace ShoppingPlatform.Dto
         public List<string> AvailableColors { get; set; } = new List<string>();
         public List<string> AvailableSizes { get; set; } = new List<string>();
         public List<Price> PriceList { get; set; } = new();
+        public List<SuggestedProducts> SuggestedProducts { get; set; } = new();
+
     }
 
     // Full product detail returned by GET /api/products/{id}
