@@ -37,7 +37,7 @@ namespace ShoppingPlatform.DTOs
     {
         public string Currency { get; set; } = string.Empty;
         public List<ProductRequest> productRequests { get; set; } = new();
-        public Address ShippingAddress { get; set; } = null!;
+        public Address? ShippingAddress { get; set; }
         public string PaymentMethod { get; set; } = "COD"; // "COD" or "razorpay"
         public string? CouponCode { get; set; }
         public decimal? CouponDiscount { get; set; }
