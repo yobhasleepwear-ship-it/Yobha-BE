@@ -27,9 +27,27 @@ namespace ShoppingPlatform.Helpers
         // 'isInternational' flag toggles which key pair to use.
         public async Task<RazorpayOrderResult> CreateRazorpayOrderAsync(string orderId, decimal amount, string currency, bool isInternational = false)
         {
-            var result = new RazorpayOrderResult();
+            var result = new RazorpayOrderResult
+            {
+                Success = false, // default to false — set true on success
+                StatusCode = 0,
+                RequestPayload = string.Empty,
+                ResponseBody = string.Empty
+            };
 
+            // convert to smallest unit (paise for INR)
             long smallestUnit = ConvertToSmallestCurrencyUnit(amount, currency);
+            // Build payload
+            var payload = new
+            {
+                amount = smallestUnit,
+                currency = currency,
+                receipt = orderId,
+                payment_capture = 1
+            };
+
+            string payloadString = JsonSerializer.Serialize(payload);
+            result.RequestPayload = payloadString;
 
             var secrets = await GetRazorpaySecretsCachedAsync("RazorPay");
             if (secrets == null)
@@ -51,22 +69,12 @@ namespace ShoppingPlatform.Helpers
 
             var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{keyId}:{keySecret}"));
 
-            var payload = new
-            {
-                amount = smallestUnit,
-                currency = currency,
-                receipt = orderId,
-                payment_capture = 1 // auto-capture
-            };
-
-            var payloadString = JsonSerializer.Serialize(payload);
-            result.RequestPayload = payloadString;
-
             var request = new HttpRequestMessage(HttpMethod.Post, "https://api.razorpay.com/v1/orders")
             {
                 Content = new StringContent(payloadString, Encoding.UTF8, "application/json")
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", auth);
+            request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
 
             HttpResponseMessage resp;
             try
@@ -75,7 +83,7 @@ namespace ShoppingPlatform.Helpers
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "HTTP request to Razorpay failed");
+                _log.LogError(ex, "HTTP request to Razorpay failed for order {OrderId}", orderId);
                 result.ErrorMessage = $"HTTP error: {ex.Message}";
                 return result;
             }
@@ -87,7 +95,7 @@ namespace ShoppingPlatform.Helpers
             if (!resp.IsSuccessStatusCode)
             {
                 _log.LogError("Razorpay order creation failed: {Status} {Body}", resp.StatusCode, body);
-                result.ErrorMessage = $"Razorpay error: {resp.StatusCode}";
+                result.ErrorMessage = $"Razorpay error: {(int)resp.StatusCode}";
                 result.Success = false;
                 return result;
             }
@@ -108,7 +116,7 @@ namespace ShoppingPlatform.Helpers
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "Failed to parse razorpay response JSON");
+                _log.LogError(ex, "Failed to parse Razorpay response JSON for order {OrderId}", orderId);
                 result.ErrorMessage = "Invalid JSON from Razorpay";
                 result.Success = false;
             }

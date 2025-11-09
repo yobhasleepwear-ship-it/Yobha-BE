@@ -393,18 +393,46 @@ namespace ShoppingPlatform.Controllers
         [HttpPost]
         [Authorize]
 
+        [HttpPost]
         public async Task<IActionResult> CreateOrder([FromBody] CreateOrderRequestV2 req)
         {
-            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "anonymous";
+            if (req == null) return BadRequest("Request body required");
+
+            // get user id from claims (adjust to your auth)
+            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+            _logger.LogInformation("CreateOrder called by user {UserId} paymentMethod={PaymentMethod}", userId, req.PaymentMethod);
+
+            CreateOrderResponse result;
             try
             {
-                var order = await _orderRepo.CreateOrderAsync(req, userId);
-                return Ok(new { success = true, orderId = order.Id, razorpayOrderId = order.RazorpayOrderId, total = order.Total });
+                result = await _orderRepo.CreateOrderAsync(req, userId);
+            }
+            catch (ArgumentException aex)
+            {
+                _logger.LogWarning(aex, "Bad request in CreateOrder");
+                return BadRequest(aex.Message);
+            }
+            catch (InvalidOperationException ioex)
+            {
+                _logger.LogError(ioex, "Order creation failed");
+                return BadRequest(ioex.Message);
             }
             catch (Exception ex)
             {
-                return BadRequest(new { success = false, message = ex.Message });
+                _logger.LogError(ex, "Unhandled error creating order");
+                return StatusCode(500, "Internal Server Error");
             }
+
+            // If you want Created and a location header (adjust GetOrder route to exist)
+            if (result.Success)
+            {
+                var idForLocation = string.IsNullOrWhiteSpace(result.Id) ? result.OrderId : result.Id;
+                return CreatedAtAction(nameof(Get), new { id = idForLocation }, result);
+            }
+
+            // Return the result anyway (will include RazorpayDebug)
+            return BadRequest(result);
         }
     }
 }

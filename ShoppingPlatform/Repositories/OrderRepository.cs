@@ -271,10 +271,12 @@ namespace ShoppingPlatform.Repositories
                     order.GiftCardId = giftCard.Id;
                     order.GiftCardNumber = giftCard.GiftCardNumber;
 
+                    // ---- RESPONSE MAPPING (changed only to populate Id & OrderId correctly) ----
                     return new CreateOrderResponse
                     {
                         Success = true,
-                        OrderId = order.Id,
+                        Id = order.Id?.ToString() ?? string.Empty,                 // DB id as string
+                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human order number
                         RazorpayOrderId = order.RazorpayOrderId,
                         Total = order.Total,
                         PaymentGatewayResponse = order.PaymentGatewayResponse
@@ -316,10 +318,10 @@ namespace ShoppingPlatform.Repositories
                         var updateOptions = new UpdateOptions
                         {
                             ArrayFilters = new List<ArrayFilterDefinition>
-                    {
-                        new BsonDocumentArrayFilterDefinition<BsonDocument>(
-                            new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
-                    }
+                {
+                    new BsonDocumentArrayFilterDefinition<BsonDocument>(
+                        new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
+                }
                         };
 
                         var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
@@ -400,11 +402,12 @@ namespace ShoppingPlatform.Repositories
 
                         await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
 
-                        // return the order + razorpay debug info to caller for immediate inspection
+                        // ---- RESPONSE MAPPING (changed only to populate Id & OrderId correctly) ----
                         var responseDto = new CreateOrderResponse
                         {
                             Success = razorResult.Success,
-                            OrderId = order.Id,
+                            Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
+                            OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
                             RazorpayOrderId = razorResult.RazorpayOrderId,
                             Total = order.Total,
                             RazorpayDebug = razorResult,
@@ -418,7 +421,8 @@ namespace ShoppingPlatform.Repositories
                     return new CreateOrderResponse
                     {
                         Success = true,
-                        OrderId = order.Id,
+                        Id = order.Id?.ToString() ?? string.Empty,                      // DB id as string
+                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human-facing order number
                         RazorpayOrderId = order.RazorpayOrderId,
                         Total = order.Total,
                         PaymentGatewayResponse = order.PaymentGatewayResponse
