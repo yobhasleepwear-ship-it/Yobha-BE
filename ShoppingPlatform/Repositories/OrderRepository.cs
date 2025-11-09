@@ -176,7 +176,7 @@ namespace ShoppingPlatform.Repositories
 
         foreach (var pr in req.productRequests)
         {
-            var prod = products.Single(p => p.Id == pr.id);
+            var prod = products.Where(p => p.Id == pr.id).FirstOrDefault();
 
             var priceEntry = prod.PriceList.FirstOrDefault(px =>
                 string.Equals(px.Size, pr.Size, StringComparison.OrdinalIgnoreCase)
