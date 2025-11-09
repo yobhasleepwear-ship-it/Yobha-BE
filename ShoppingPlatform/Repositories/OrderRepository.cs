@@ -190,7 +190,7 @@ namespace ShoppingPlatform.Repositories
             if (priceEntry == null) throw new InvalidOperationException($"Price not found for product {pr.id}, size {pr.Size}, currency {req.Currency}");
 
             int qty = pr.Quantity > 0 ? pr.Quantity : 1;
-            if (priceEntry.Quantity < qty) throw new InvalidOperationException($"Insufficient stock for product {pr.id}");
+            //if (priceEntry.Quantity < qty) throw new InvalidOperationException($"Insufficient stock for product {pr.id}");
 
             decimal unitPrice = priceEntry.PriceAmount;
             decimal lineTotal = unitPrice * qty;
