@@ -146,7 +146,7 @@ namespace ShoppingPlatform.Repositories
             return await _col.CountDocumentsAsync(filter);
         }
 
-        public async Task<Order> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
+        public async Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId)
         {
             if (req == null) throw new ArgumentNullException(nameof(req));
             if (req.productRequests == null) req.productRequests = new List<ProductRequest>();
@@ -248,7 +248,7 @@ namespace ShoppingPlatform.Repositories
 
             // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)
             if (!order.Items.Any() && order.GiftCardAmount.HasValue && string.IsNullOrWhiteSpace(order.GiftCardNumber))
-            {  
+            {
                 using var session = await _mongoClient.StartSessionAsync();
                 session.StartTransaction();
                 try
@@ -270,7 +270,15 @@ namespace ShoppingPlatform.Repositories
 
                     order.GiftCardId = giftCard.Id;
                     order.GiftCardNumber = giftCard.GiftCardNumber;
-                    return order;
+
+                    return new CreateOrderResponse
+                    {
+                        Success = true,
+                        OrderId = order.Id,
+                        RazorpayOrderId = order.RazorpayOrderId,
+                        Total = order.Total,
+                        PaymentGatewayResponse = order.PaymentGatewayResponse
+                    };
                 }
                 catch (Exception)
                 {
@@ -361,9 +369,10 @@ namespace ShoppingPlatform.Repositories
                     {
                         bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
 
+                        // call helper (returns request/response metadata)
                         var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
 
-                        // Save the raw gateway info for debugging (combine request+response)
+                        // prepare debug blob to persist in DB
                         var gatewayDebug = new
                         {
                             Request = razorResult.RequestPayload,
@@ -373,6 +382,7 @@ namespace ShoppingPlatform.Repositories
                         };
                         string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
 
+                        // update order doc: store debug JSON and set razorpay id only if available
                         var payUpdate = Builders<Order>.Update
                             .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
                             .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
@@ -385,21 +395,34 @@ namespace ShoppingPlatform.Repositories
                         }
                         else
                         {
-                            // keep PaymentStatus as Failed or Pending depending on your desired behaviour
                             order.PaymentStatus = "Failed";
                         }
 
                         await _col.UpdateOneAsync(o => o.Id == order.Id, payUpdate);
 
-                        // If you want to stop the flow on Razorpay failure:
-                        if(!razorResult.Success)
-{
-                            var errorMsg = $"Razorpay order creation failed for OrderNumber: {order.OrderNumber}. Debug: {gatewayDebugJson}";
-                            //_log.LogError(errorMsg);
-                            throw new InvalidOperationException(errorMsg);
-                        }
+                        // return the order + razorpay debug info to caller for immediate inspection
+                        var responseDto = new CreateOrderResponse
+                        {
+                            Success = razorResult.Success,
+                            OrderId = order.Id,
+                            RazorpayOrderId = razorResult.RazorpayOrderId,
+                            Total = order.Total,
+                            RazorpayDebug = razorResult,
+                            PaymentGatewayResponse = gatewayDebugJson
+                        };
+
+                        return responseDto;
                     }
-                    return order;
+
+                    // Non-razorpay path: return success wrapper
+                    return new CreateOrderResponse
+                    {
+                        Success = true,
+                        OrderId = order.Id,
+                        RazorpayOrderId = order.RazorpayOrderId,
+                        Total = order.Total,
+                        PaymentGatewayResponse = order.PaymentGatewayResponse
+                    };
                 }
                 catch (MongoWriteException mwx) when (mwx.WriteError?.Category == ServerErrorCategory.DuplicateKey)
                 {

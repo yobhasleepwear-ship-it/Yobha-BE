@@ -72,4 +72,16 @@ namespace ShoppingPlatform.DTOs
         public string? ErrorMessage { get; set; }                   // friendly error if any
     }
 
+    public class CreateOrderResponse
+    {
+        public bool Success { get; set; }
+        public string OrderId { get; set; } = string.Empty;
+        public string? RazorpayOrderId { get; set; }
+        public decimal Total { get; set; }
+        // full debug object returned from the payment helper
+        public RazorpayOrderResult? RazorpayDebug { get; set; }
+        // mirror what's saved in DB for quick inspection
+        public string? PaymentGatewayResponse { get; set; }
+    }
+
 }

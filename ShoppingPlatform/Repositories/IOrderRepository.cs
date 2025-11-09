@@ -23,7 +23,7 @@ namespace ShoppingPlatform.Repositories
 
         Task<long> GetUserOrderCountAsync(string userId);
 
-        Task<Order> CreateOrderAsync(CreateOrderRequestV2 req, string userId);
+        Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId);
 
     }
 }
