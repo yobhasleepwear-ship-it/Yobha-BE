@@ -165,7 +165,7 @@ namespace ShoppingPlatform.Repositories
     if (req.productRequests.Any())
     {
         var productIds = req.productRequests.Select(p => p.id).Distinct().ToList();
-        var filter = Builders<Product>.Filter.In(p => p.ProductId, productIds);
+        var filter = Builders<Product>.Filter.In(p => p.Id, productIds);
         products = await _products.Find(filter).ToListAsync();
 
         if (products.Count != productIds.Count)
