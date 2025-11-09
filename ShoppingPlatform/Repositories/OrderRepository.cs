@@ -271,12 +271,58 @@ namespace ShoppingPlatform.Repositories
                     order.GiftCardId = giftCard.Id;
                     order.GiftCardNumber = giftCard.GiftCardNumber;
 
-                    // ---- RESPONSE MAPPING (changed only to populate Id & OrderId correctly) ----
+                    // --- NEW: If payment method is razorpay, create Razorpay order and persist debug info ---
+                    if (string.Equals(order.PaymentMethod, "razorpay", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool isInternational = !string.Equals(order.Currency, "INR", StringComparison.OrdinalIgnoreCase);
+
+                        var razorResult = await _paymentHelper.CreateRazorpayOrderAsync(order.OrderNumber, order.Total, order.Currency, isInternational);
+
+                        var gatewayDebug = new
+                        {
+                            Request = razorResult.RequestPayload,
+                            Response = razorResult.ResponseBody,
+                            StatusCode = razorResult.StatusCode,
+                            Error = razorResult.ErrorMessage
+                        };
+                        string gatewayDebugJson = JsonSerializer.Serialize(gatewayDebug);
+
+                        var payUpdate = Builders<Order>.Update
+                            .Set(o => o.PaymentGatewayResponse, gatewayDebugJson)
+                            .Set(o => o.PaymentStatus, razorResult.Success ? "Pending" : "Failed");
+
+                        if (razorResult.Success && !string.IsNullOrWhiteSpace(razorResult.RazorpayOrderId))
+                        {
+                            payUpdate = payUpdate.Set(o => o.RazorpayOrderId, razorResult.RazorpayOrderId);
+                            order.RazorpayOrderId = razorResult.RazorpayOrderId;
+                            order.PaymentStatus = "Pending";
+                        }
+                        else
+                        {
+                            order.PaymentStatus = "Failed";
+                        }
+
+                        // persist payment fields (use session overload to be consistent)
+                        await _col.UpdateOneAsync(session, Builders<Order>.Filter.Eq(o => o.Id, order.Id), payUpdate);
+
+                        return new CreateOrderResponse
+                        {
+                            Success = razorResult.Success,
+                            Id = order.Id?.ToString() ?? string.Empty,
+                            OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
+                            RazorpayOrderId = razorResult.RazorpayOrderId,
+                            Total = order.Total,
+                            RazorpayDebug = razorResult,
+                            PaymentGatewayResponse = gatewayDebugJson
+                        };
+                    }
+
+                    // Non-razorpay payment for gift card: return as before
                     return new CreateOrderResponse
                     {
                         Success = true,
-                        Id = order.Id?.ToString() ?? string.Empty,                 // DB id as string
-                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty, // human order number
+                        Id = order.Id?.ToString() ?? string.Empty,
+                        OrderId = order.OrderNumber ?? order.Id?.ToString() ?? string.Empty,
                         RazorpayOrderId = order.RazorpayOrderId,
                         Total = order.Total,
                         PaymentGatewayResponse = order.PaymentGatewayResponse
