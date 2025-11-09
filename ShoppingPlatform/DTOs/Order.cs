@@ -47,6 +47,8 @@ namespace ShoppingPlatform.DTOs
         public string? GiftCardNumber { get; set; }
         public decimal? GiftCardAmount { get; set; }
         public string? ShippingRemarks { get; set; }
+        public string? Email { get; set; }
+        public string? orderCountry { get; set; }
 
     }
     public class ProductRequest

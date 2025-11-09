@@ -241,6 +241,8 @@ namespace ShoppingPlatform.Repositories
                 GiftCardNumber = req.GiftCardNumber,
                 GiftCardAmount = req.GiftCardAmount,
                 ShippingRemarks = req.ShippingRemarks,
+                orderCountry = req.orderCountry,
+                Email = req.Email,
             };
 
             // Special flow: BUYING a gift card (no items, but giftCardAmount present and no giftCardNumber)

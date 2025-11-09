@@ -108,6 +108,8 @@ namespace ShoppingPlatform.Models
         public DateTime? ShippedAt { get; set; }
         public string? ShippingPartnerResponse { get; set; } // raw response for debugging
         public string? ShippingRemarks { get; set; }
+        public string? Email { get; set; }
+
         public string? orderCountry { get; set; }
     }
 
