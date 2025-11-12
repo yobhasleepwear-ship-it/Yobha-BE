@@ -368,34 +368,34 @@ namespace ShoppingPlatform.Repositories
 
                     await _col.InsertOneAsync(session, order);
 
-                    foreach (var oi in orderItems)
-                    {
-                        var prodFilter = Builders<Product>.Filter.And(
-                            Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId),
-                            Builders<Product>.Filter.ElemMatch(p => p.PriceList,
-                                pr => pr.Size == oi.Size && pr.Currency == oi.Currency && pr.Quantity >= oi.Quantity)
-                        );
+                    //foreach (var oi in orderItems)
+                    //{
+                    //    var prodFilter = Builders<Product>.Filter.And(
+                    //        Builders<Product>.Filter.Eq(p => p.Id, oi.ProductObjectId),
+                    //        Builders<Product>.Filter.ElemMatch(p => p.PriceList,
+                    //            pr => pr.Size == oi.Size && pr.Currency == oi.Currency && pr.Quantity >= oi.Quantity)
+                    //    );
 
-                        var update = Builders<Product>.Update
-                            .Inc($"{"PriceList"}.$[elem].Quantity", -oi.Quantity)
-                            .Set(p => p.UpdatedAt, DateTime.UtcNow);
+                    //    var update = Builders<Product>.Update
+                    //        .Inc($"{"PriceList"}.$[elem].Quantity", -oi.Quantity)
+                    //        .Set(p => p.UpdatedAt, DateTime.UtcNow);
 
-                        var updateOptions = new UpdateOptions
-                        {
-                            ArrayFilters = new List<ArrayFilterDefinition>
-                    {
-                        new BsonDocumentArrayFilterDefinition<BsonDocument>(
-                            new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
-                    }
-                        };
+                    //    var updateOptions = new UpdateOptions
+                    //    {
+                    //        ArrayFilters = new List<ArrayFilterDefinition>
+                    //{
+                    //    new BsonDocumentArrayFilterDefinition<BsonDocument>(
+                    //        new BsonDocument { { "elem.Size", oi.Size }, { "elem.Currency", oi.Currency } })
+                    //}
+                    //    };
 
-                        var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
-                        if (result.ModifiedCount == 0)
-                        {
-                            // DO NOT abort here - throw and let outer catch handle the abort.
-                            throw new InvalidOperationException($"Concurrent stock update prevented decrement for product {oi.ProductId}");
-                        }
-                    }
+                    //    //var result = await _products.UpdateOneAsync(session, prodFilter, update, updateOptions);
+                    //    if (result.ModifiedCount == 0)
+                    //    {
+                    //        // DO NOT abort here - throw and let outer catch handle the abort.
+                    //        throw new InvalidOperationException($"Concurrent stock update prevented decrement for product {oi.ProductId}");
+                    //    }
+                    //}
 
                     // Apply gift card if provided
                     if (!string.IsNullOrWhiteSpace(req.GiftCardNumber))
@@ -546,7 +546,7 @@ namespace ShoppingPlatform.Repositories
                 catch (Exception)
                 {
                     try { await session.AbortTransactionAsync(); } catch { /* ignore if already aborted */ }
-                    await TryRollbackInventoryAsync(orderItems);
+                    //await TryRollbackInventoryAsync(orderItems);
                     throw;
                 }
             }
