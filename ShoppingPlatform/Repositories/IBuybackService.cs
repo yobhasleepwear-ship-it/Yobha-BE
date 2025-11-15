@@ -1,4 +1,6 @@
-﻿using ShoppingPlatform.Models;
+﻿using ShoppingPlatform.Dto;
+using ShoppingPlatform.DTOs;
+using ShoppingPlatform.Models;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -14,20 +16,16 @@ namespace ShoppingPlatform.Repositories
         /// </summary>
         Task<IEnumerable<BuybackRequest>> GetBuybacksByUserAsync(string userId);
 
-        /// <summary>
-        /// Mock schedule pickup integration (Delhivery).
-        /// Updates delivery status to 'inTransit'.
-        /// </summary>
-        Task<BuybackRequest> SchedulePickupAsync(string buybackId);
 
         /// <summary>
         /// Fetches buyback details by orderId & productId or just productId.
         /// </summary>
-        Task<IEnumerable<BuybackRequest>> GetBuybackDetailsAsync(string orderId, string productId);
+        Task<PagedResult<BuybackRequest>> GetBuybackDetailsAsync(string? orderId, string? productId, string? buybackId, int page = 1, int size = 20);
 
         /// <summary>
         /// Admin update: buyback status, final status, loyalty points.
         /// </summary>
-        Task<BuybackRequest> UpdateBuybackAsync(AdminUpdateBuybackRequest request);
+        Task<BuybackRequest> AdminApproveOrUpdateBuybackAsync(AdminUpdateBuybackRequest request);
+        Task<object> InitiateBuybackPaymentAsync(string buybackId, string userId);
     }
 }

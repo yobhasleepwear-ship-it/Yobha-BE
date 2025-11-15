@@ -76,7 +76,7 @@ namespace ShoppingPlatform.Repositories
             return result.ModifiedCount > 0;
         }
 
-        public async Task<PagedResult<Order>> GetOrdersAdminAsync(
+        public async Task<PagedResult<Order>>    GetOrdersAdminAsync(
     int page, int pageSize, string sort, OrderFilter filter, CancellationToken ct)
         {
             var builder = Builders<Order>.Filter;

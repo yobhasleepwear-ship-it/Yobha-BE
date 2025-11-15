@@ -2,6 +2,8 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
+using ShoppingPlatform.Dto;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 using System.Security.Claims;
@@ -29,26 +31,42 @@ namespace ShoppingPlatform.Controllers
             if (string.IsNullOrWhiteSpace(userId))
                 return Unauthorized(ApiResponse<string>.Fail("User id not present in token."));
 
+            // Validate request type
+            if (string.IsNullOrWhiteSpace(dto.RequestType))
+                return BadRequest(ApiResponse<string>.Fail("RequestType is required (TradeIn, RepairReuse, Recycle)."));
+
             var model = new BuybackRequest
             {
                 Id = ObjectId.GenerateNewId().ToString(),
                 UserId = userId,
+
                 OrderId = dto.OrderId,
                 ProductId = dto.ProductId,
                 ProductUrl = dto.ProductUrl ?? new List<string>(),
                 InvoiceUrl = dto.InvoiceUrl,
                 Country = dto.Country,
+
                 Quiz = dto.Quiz ?? new List<QuizItem>(),
                 BuybackStatus = "pending",
-                FinalStatus = "pending",
-                DeliveryStatus = "pending",
+
+                // New fields
+                RequestType = dto.RequestType,     // TradeIn, RepairReuse, Recycle
+                Amount = dto.Amount,               // Only for Repair & Reuse (admin finalizes)
+                LoyaltyPoints = dto.LoyaltyPoints, // Only for TradeIn / Recycle (admin finalizes)
+                Currency = dto.Currency ?? "INR",
+
+                PaymentMethod = "COD",             // Default
+                PaymentStatus = "Pending",
+
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
 
             var created = await _buybackService.CreateBuybackAsync(model);
+
             return Ok(ApiResponse<BuybackRequest>.Ok(created, "Buyback request submitted successfully."));
         }
+
 
         // GET api/buyback/getBuyBackDetails
         [HttpGet("getBuyBackDetails")]
@@ -70,39 +88,18 @@ namespace ShoppingPlatform.Controllers
             }
         }
 
-        // POST api/buyback/schedulePickup/{buybackId}
-        [HttpPost("schedulePickup/{buybackId}")]
-        [Authorize]
-        public async Task<IActionResult> SchedulePickup(string buybackId)
-        {
-            try
-            {
-                // In a real flow you may also verify user owns the buyback; left generic here.
-                var updated = await _buybackService.SchedulePickupAsync(buybackId);
-                return Ok(ApiResponse<BuybackRequest>.Ok(updated, "Pickup scheduled (mock)."));
-            }
-            catch (KeyNotFoundException kex)
-            {
-                return NotFound(ApiResponse<string>.Fail(kex.Message));
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, ApiResponse<string>.Fail($"Server error: {ex.Message}"));
-            }
-        }
-
-        // ADMIN: GET api/buyback/admin/get?orderId=..&productId=..
         [HttpGet("admin/get")]
         [Authorize(Roles = "Admin")]
-        public async Task<IActionResult> GetBuyback([FromQuery] string orderId, [FromQuery] string productId)
+        public async Task<IActionResult> GetBuyback([FromQuery] string? orderId, [FromQuery] string? productId, [FromQuery] string? buybackId, [FromQuery] int page = 1, [FromQuery] int size = 20)
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(productId))
-                    return BadRequest(ApiResponse<string>.Fail("productId is required"));
+                // normalize page/size
+                page = Math.Max(1, page);
+                size = Math.Clamp(size, 1, 100); // cap page size to 100
 
-                var list = await _buybackService.GetBuybackDetailsAsync(orderId, productId);
-                return Ok(ApiResponse<object>.Ok(list));
+                var result = await _buybackService.GetBuybackDetailsAsync(orderId, productId, buybackId, page, size);
+                return Ok(ApiResponse<PagedResult<BuybackRequest>>.Ok(result));
             }
             catch (Exception ex)
             {
@@ -110,7 +107,6 @@ namespace ShoppingPlatform.Controllers
             }
         }
 
-        // ADMIN: PUT api/buyback/admin/update
         [HttpPut("admin/update")]
         [Authorize(Roles = "Admin")]
         public async Task<IActionResult> UpdateBuyback([FromBody] AdminUpdateBuybackRequest request)
@@ -120,12 +116,44 @@ namespace ShoppingPlatform.Controllers
                 if (string.IsNullOrWhiteSpace(request.BuybackId))
                     return BadRequest(ApiResponse<string>.Fail("buybackId is required"));
 
-                var updated = await _buybackService.UpdateBuybackAsync(request);
+                var updated = await _buybackService.AdminApproveOrUpdateBuybackAsync(request);
                 return Ok(ApiResponse<BuybackRequest>.Ok(updated, "Buyback record updated."));
             }
             catch (KeyNotFoundException knf)
             {
                 return NotFound(ApiResponse<string>.Fail(knf.Message));
+            }
+            catch (ArgumentException aex)
+            {
+                return BadRequest(ApiResponse<string>.Fail(aex.Message));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ApiResponse<string>.Fail($"Server error: {ex.Message}"));
+            }
+        }
+
+        // POST api/buyback/pay/{buybackId}
+        [HttpPost("pay/{buybackId}")]
+        [Authorize]
+        public async Task<IActionResult> CreateBuybackPayment(string buybackId)
+        {
+            try
+            {
+                var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+                if (string.IsNullOrWhiteSpace(userId))
+                    return Unauthorized(ApiResponse<string>.Fail("User id not present in token."));
+
+                var paymentResult = await _buybackService.InitiateBuybackPaymentAsync(buybackId, userId);
+                return Ok(ApiResponse<object>.Ok(paymentResult, "Payment initiated."));
+            }
+            catch (KeyNotFoundException knf)
+            {
+                return NotFound(ApiResponse<string>.Fail(knf.Message));
+            }
+            catch (InvalidOperationException iop)
+            {
+                return BadRequest(ApiResponse<string>.Fail(iop.Message));
             }
             catch (Exception ex)
             {

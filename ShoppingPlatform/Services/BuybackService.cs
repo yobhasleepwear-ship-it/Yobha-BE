@@ -1,5 +1,8 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using ShoppingPlatform.Dto;
+using ShoppingPlatform.DTOs;
+using ShoppingPlatform.Helpers;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Repositories;
 
@@ -8,19 +11,17 @@ namespace ShoppingPlatform.Services
     public class BuybackService : IBuybackService
     {
         private readonly IMongoCollection<BuybackRequest> _buybackCollection;
-        private readonly IMongoCollection<UserMinimal> _userCollection;
+        private readonly IMongoCollection<User> _userCollection;
+        private readonly IMongoClient _mongoClient;
+        private readonly PaymentHelper _paymentHelper;
 
-        // Minimal representation of the User document for loyalty updates
-        private class UserMinimal
-        {
-            public string Id { get; set; }
-            public int LoyaltyPoints { get; set; }
-        }
 
-        public BuybackService(IMongoDatabase database)
+        public BuybackService(IMongoDatabase database, IMongoClient mongoClient, PaymentHelper paymentHelper)
         {
             _buybackCollection = database.GetCollection<BuybackRequest>("Buyback");
-            _userCollection = database.GetCollection<UserMinimal>("Users");
+            _userCollection = database.GetCollection<User>("users");
+            _mongoClient = mongoClient;
+            _paymentHelper = paymentHelper;
         }
 
         /// <summary>
@@ -49,87 +50,199 @@ namespace ShoppingPlatform.Services
             return await _buybackCollection.Find(filter).Sort(sort).ToListAsync();
         }
 
-        /// <summary>
-        /// Mock Delhivery integration — marks the request as inTransit.
-        /// </summary>
-        public async Task<BuybackRequest> SchedulePickupAsync(string buybackId)
+
+        public async Task<PagedResult<BuybackRequest>> GetBuybackDetailsAsync(string? orderId, string? productId, string? buybackId, int page = 1, int size = 20)
         {
-            var filter = Builders<BuybackRequest>.Filter.Eq(b => b.Id, buybackId);
+            // Build dynamic filters only for provided params
+            var filters = new List<FilterDefinition<BuybackRequest>>();
+            var builder = Builders<BuybackRequest>.Filter;
 
-            var trackingId = $"DLV-MOCK-{ObjectId.GenerateNewId()}";
-            var update = Builders<BuybackRequest>.Update
-                .Set(b => b.PickupTrackingId, trackingId)
-                .Set(b => b.DeliveryStatus, "inTransit")
-                .Set(b => b.PickupScheduledAt, DateTime.UtcNow)
-                .Set(b => b.UpdatedAt, DateTime.UtcNow);
-
-            var options = new FindOneAndUpdateOptions<BuybackRequest>
-            {
-                ReturnDocument = ReturnDocument.After
-            };
-
-            var updated = await _buybackCollection.FindOneAndUpdateAsync(filter, update, options);
-            if (updated == null)
-                throw new KeyNotFoundException($"Buyback record with ID {buybackId} not found.");
-
-            return updated;
-        }
-
-        /// <summary>
-        /// Admin side — fetch by orderId & productId or only productId.
-        /// </summary>
-        public async Task<IEnumerable<BuybackRequest>> GetBuybackDetailsAsync(string orderId, string productId)
-        {
-            FilterDefinition<BuybackRequest> filter;
+            if (!string.IsNullOrWhiteSpace(buybackId))
+                filters.Add(builder.Eq(b => b.Id, buybackId));
 
             if (!string.IsNullOrWhiteSpace(orderId))
-            {
-                filter = Builders<BuybackRequest>.Filter.And(
-                    Builders<BuybackRequest>.Filter.Eq(b => b.OrderId, orderId),
-                    Builders<BuybackRequest>.Filter.Eq(b => b.ProductId, productId)
-                );
-            }
-            else
-            {
-                filter = Builders<BuybackRequest>.Filter.Eq(b => b.ProductId, productId);
-            }
+                filters.Add(builder.Eq(b => b.OrderId, orderId));
 
-            return await _buybackCollection.Find(filter).ToListAsync();
+            if (!string.IsNullOrWhiteSpace(productId))
+                filters.Add(builder.Eq(b => b.ProductId, productId));
+
+            FilterDefinition<BuybackRequest> finalFilter = filters.Count == 0 ? builder.Empty : builder.And(filters);
+
+            // Pagination
+            page = Math.Max(1, page);
+            size = Math.Clamp(size, 1, 100);
+            var skip = (page - 1) * (long)size;
+
+            // Total count (fast enough; if very large collection consider using estimated count or limit)
+            var total = await _buybackCollection.CountDocumentsAsync(finalFilter);
+
+            // Get paged items sorted by CreatedAt desc
+            var sort = Builders<BuybackRequest>.Sort.Descending(b => b.CreatedAt);
+
+            var items = await _buybackCollection
+                .Find(finalFilter)
+                .Sort(sort)
+                .Skip((int)skip)
+                .Limit(size)
+                .ToListAsync();
+
+            return new PagedResult<BuybackRequest>
+            {
+                Items = items,
+                Page = page,
+                PageSize = size,
+                TotalCount = total,
+            };
+        }
+
+
+        public async Task<BuybackRequest> AdminApproveOrUpdateBuybackAsync(AdminUpdateBuybackRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.BuybackId))
+                throw new ArgumentException("BuybackId is required.");
+
+            var filter = Builders<BuybackRequest>.Filter.Eq(b => b.Id, request.BuybackId);
+            var existing = await _buybackCollection.Find(filter).FirstOrDefaultAsync();
+            if (existing == null)
+                throw new KeyNotFoundException("Buyback not found");
+
+            // Determine type
+            var reqType = existing.RequestType?.Trim()?.ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(reqType))
+                throw new InvalidOperationException("Buyback request type is not set.");
+
+            using var session = await _mongoClient.StartSessionAsync();
+            session.StartTransaction();
+
+            try
+            {
+                // TRADEIN / RECYCLE => award loyalty points
+                if (reqType == "tradein" || reqType == "recycle")
+                {
+                    var pts = request.LoyaltyPoints ?? existing.LoyaltyPoints ?? 0m;
+                    if (pts <= 0) throw new ArgumentException("LoyaltyPoints must be provided and greater than zero for TradeIn/Recycle approvals.");
+
+                    // Update buyback doc
+                    var buybackUpdate = Builders<BuybackRequest>.Update
+                        .Set(b => b.LoyaltyPoints, pts)
+                        .Set(b => b.BuybackStatus, "approved")
+                        .Set(b => b.UpdatedAt, DateTime.UtcNow);
+                    await _buybackCollection.UpdateOneAsync(session, filter, buybackUpdate);
+
+                    // Credit user loyalty points with $inc
+                    var userFilter = Builders<User>.Filter.Eq(u => u.Id, existing.UserId);
+                    var userUpdate = Builders<User>.Update.Inc(u => u.LoyaltyPoints, pts);
+                    var user = await _userCollection.FindOneAndUpdateAsync(session, userFilter, userUpdate, new FindOneAndUpdateOptions<User> { ReturnDocument = ReturnDocument.After });
+
+                    if (user == null)
+                    {
+                        await session.AbortTransactionAsync();
+                        throw new KeyNotFoundException($"User {existing.UserId} not found to credit loyalty points.");
+                    }
+
+                    await session.CommitTransactionAsync();
+
+                    // return the fresh copy
+                    var updated = await _buybackCollection.Find(filter).FirstOrDefaultAsync();
+                    return updated!;
+                }
+
+                // REPAIRREUSE => admin must provide amount
+                if (reqType == "repairreuse")
+                {
+                    var amount = request.Amount ?? existing.Amount;
+                    if (amount == null || amount <= 0) throw new ArgumentException("Amount must be provided and greater than zero for RepairReuse approval.");
+
+                    var currency = request.Currency ?? existing.Currency ?? "INR";
+                    var paymentMethod = (request.PaymentMethod ?? existing.PaymentMethod ?? "razorpay").ToLowerInvariant();
+
+                    var buybackUpdate = Builders<BuybackRequest>.Update
+                        .Set(b => b.Amount, amount)
+                        .Set(b => b.Currency, currency)
+                        .Set(b => b.PaymentMethod, paymentMethod)
+                        .Set(b => b.BuybackStatus, "approved")
+                        .Set(b => b.PaymentStatus, "Pending")
+                        .Set(b => b.UpdatedAt, DateTime.UtcNow);
+
+                    await _buybackCollection.UpdateOneAsync(session, filter, buybackUpdate);
+                    await session.CommitTransactionAsync();
+
+                    var updated = await _buybackCollection.Find(filter).FirstOrDefaultAsync();
+                    return updated!;
+                }
+
+                // Unknown type
+                await session.AbortTransactionAsync();
+                throw new InvalidOperationException("Unsupported RequestType for admin update.");
+            }
+            catch
+            {
+                await session.AbortTransactionAsync();
+                throw;
+            }
         }
 
         /// <summary>
-        /// Admin update: buyback status, final status, loyalty points (if Accepted).
+        /// Called by user to initiate payment for RepairReuse buyback.
+        /// Creates Razorpay order via PaymentHelper and persists RazorpayOrderId.
+        /// Returns an object (Razorpay order id + any required details) suitable for frontend.
         /// </summary>
-        public async Task<BuybackRequest> UpdateBuybackAsync(AdminUpdateBuybackRequest request)
+        public async Task<object> InitiateBuybackPaymentAsync(string buybackId, string userId)
         {
-            var filter = Builders<BuybackRequest>.Filter.Eq(b => b.Id, request.BuybackId);
+            var filter = Builders<BuybackRequest>.Filter.Eq(b => b.Id, buybackId);
+            var existing = await _buybackCollection.Find(filter).FirstOrDefaultAsync();
+            if (existing == null)
+                throw new KeyNotFoundException("Buyback not found.");
 
-            var update = Builders<BuybackRequest>.Update
-                .Set(b => b.BuybackStatus, request.BuybackStatus ?? "pending")
-                .Set(b => b.FinalStatus, request.FinalStatus ?? "pending")
-                .Set(b => b.UpdatedAt, DateTime.UtcNow);
+            if (existing.UserId != userId)
+                throw new InvalidOperationException("User is not owner of this buyback request.");
 
-            var options = new FindOneAndUpdateOptions<BuybackRequest>
+            if (existing.RequestType?.Trim().ToLowerInvariant() != "repairreuse")
+                throw new InvalidOperationException("Payment only supported for RepairReuse requests.");
+
+            if (existing.Amount == null || existing.Amount <= 0)
+                throw new InvalidOperationException("Buyback amount is not set. Please wait for admin to set the amount.");
+
+            if ((existing.PaymentMethod ?? "razorpay").ToLowerInvariant() != "razorpay")
+                throw new InvalidOperationException("Buyback payment method is not razorpay.");
+
+            // If a reserve has already been created, return existing razorpay order id (idempotency)
+            if (!string.IsNullOrWhiteSpace(existing.RazorpayOrderId))
             {
-                ReturnDocument = ReturnDocument.After
-            };
-
-            var updated = await _buybackCollection.FindOneAndUpdateAsync(filter, update, options);
-            if (updated == null)
-                throw new KeyNotFoundException($"Buyback record with ID {request.BuybackId} not found.");
-
-            // ✅ Add loyalty points if status is "Accepted"
-            if (request.LoyaltyPoint > 0 &&
-                !string.IsNullOrWhiteSpace(request.FinalStatus) &&
-                request.FinalStatus.Equals("Accepted", StringComparison.OrdinalIgnoreCase))
-            {
-                var userFilter = Builders<UserMinimal>.Filter.Eq(u => u.Id, updated.UserId);
-                var userUpdate = Builders<UserMinimal>.Update.Inc(u => u.LoyaltyPoints, request.LoyaltyPoint);
-
-                await _userCollection.UpdateOneAsync(userFilter, userUpdate);
+                return new
+                {
+                    existing.RazorpayOrderId,
+                    Message = "Razorpay order already created for this buyback."
+                };
             }
 
-            return updated;
+            // Create razorpay order
+            // Use a deterministic order id for receipt/traceability
+            string receiptId = $"buyback_{existing.Id}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+
+            var rpResult = await _paymentHelper.CreateRazorpayOrderAsync(receiptId, existing.Amount.Value, existing.Currency ?? "INR", isInternational: false);
+            if (!rpResult.Success)
+                throw new InvalidOperationException($"Failed to create Razorpay order: {rpResult.ErrorMessage}");
+
+            // Persist razorpay id to buyback
+            var update = Builders<BuybackRequest>.Update
+                .Set(b => b.RazorpayOrderId, rpResult.RazorpayOrderId)
+                .Set(b => b.PaymentStatus, "ReserveCreated")
+                .Set(b => b.UpdatedAt, DateTime.UtcNow)
+                .Set(b => b.PaymentGatewayResponse, rpResult.ResponseBody);
+
+            var updated = await _buybackCollection.FindOneAndUpdateAsync(filter, update, new FindOneAndUpdateOptions<BuybackRequest> { ReturnDocument = ReturnDocument.After });
+            if (updated == null)
+                throw new KeyNotFoundException("Buyback not found after creating payment reserve.");
+
+            // Return the important info for frontend to call razorpay checkout
+            return new
+            {
+                RazorpayOrderId = updated.RazorpayOrderId,
+                Amount = updated.Amount,
+                Currency = updated.Currency,
+                Message = "Razorpay order created successfully."
+            };
         }
     }
 }
