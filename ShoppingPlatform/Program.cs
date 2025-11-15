@@ -142,6 +142,9 @@ builder.Services.AddScoped<IJobPostingRepository, JobPostingRepository>();
 builder.Services.AddScoped<IApplicantRepository, ApplicantRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
+builder.Services.AddScoped<IBuybackService, BuybackService>();
+builder.Services.AddScoped<IReturnRepository, ReturnRepository>();
+
 
 // Add memory cache (used by PaymentHelper)
 builder.Services.AddMemoryCache();
@@ -152,6 +155,8 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetColl
 builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Order>("orders"));
 // products collection is accessed directly in repository from IMongoDatabase, still okay, but nothing wrong registering it:
 builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Product>("products"));
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<ReturnOrder>("returnorders"));
+
 
 // Register GiftCardHelper & PaymentHelper as typed clients/services
 // GiftCardHelper will still be resolved as scoped

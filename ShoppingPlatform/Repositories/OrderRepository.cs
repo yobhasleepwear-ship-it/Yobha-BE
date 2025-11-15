@@ -56,6 +56,11 @@ namespace ShoppingPlatform.Repositories
             return await _col.Find(o => o.Id == id).FirstOrDefaultAsync();
         }
 
+        public async Task<Order?> GetByOrderNumberAsync(string OrderNumber)
+        {
+            return await _col.Find(o => o.OrderNumber == OrderNumber).FirstOrDefaultAsync();
+        }
+
         public async Task<Order> CreateAsync(Order order)
         {
             order.CreatedAt = DateTime.UtcNow;

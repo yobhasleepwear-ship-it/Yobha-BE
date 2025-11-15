@@ -10,6 +10,7 @@ namespace ShoppingPlatform.Repositories
     {
         Task<IEnumerable<Order>> GetForUserAsync(string userId);
         Task<Order?> GetByIdAsync(string id);
+        Task<Order?> GetByOrderNumberAsync(string OrderNumber);    
         Task<Order> CreateAsync(Order order);
         Task<bool> UpdateStatusAsync(string id, string status);
         Task<bool> UpdateAsync(string id, Order order); // new
