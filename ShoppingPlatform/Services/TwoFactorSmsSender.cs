@@ -284,7 +284,7 @@ namespace ShoppingPlatform.Services
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
 
             // delegate verify call to TwoFactorService (existing behavior)
-            return await _svc.VerifyOtpAsyncV2(secretsDoc?.SMSAPIKEY, sessionId, otp);
+            return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
         }
 
         // ---------------- helpers ----------------
