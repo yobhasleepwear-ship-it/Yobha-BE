@@ -13,6 +13,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.DTOs;
+using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Sms;
 
 namespace ShoppingPlatform.Services
@@ -35,18 +36,20 @@ namespace ShoppingPlatform.Services
 
         private const string DefaultTemplateName = "SENDOTP";
         private const string DefaultSenderId = "YOBHAS";
+        private readonly ISecretsRepository _secretsRepo;
 
         public TwoFactorSmsSender(
             TwoFactorService svc,
             IOptions<TwoFactorSettings> opts,
             IConfiguration configuration,
             ILogger<TwoFactorSmsSender> logger,
-            IHttpClientFactory httpFactory)
+            IHttpClientFactory httpFactory, ISecretsRepository secretsRepo)
         {
             _svc = svc ?? throw new ArgumentNullException(nameof(svc));
             _cfg = opts?.Value ?? new TwoFactorSettings();
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _httpFactory = httpFactory ?? throw new ArgumentNullException(nameof(httpFactory));
+            _secretsRepo = secretsRepo ?? throw new ArgumentNullException(nameof(secretsRepo));
 
             // Resolve API key (same lookup strategy)
             var fromConfig = configuration["TwoFactor:ApiKey"];
@@ -275,11 +278,13 @@ namespace ShoppingPlatform.Services
 
         public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
         {
-            if (string.IsNullOrWhiteSpace(_apiKey))
+            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("OTP");
+
+            if (string.IsNullOrWhiteSpace(secretsDoc?.SMSAPIKEY))
                 throw new InvalidOperationException("TwoFactor API key is not configured.");
 
             // delegate verify call to TwoFactorService (existing behavior)
-            return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+            return await _svc.VerifyOtpAsyncV2(secretsDoc?.SMSAPIKEY, sessionId, otp);
         }
 
         // ---------------- helpers ----------------
