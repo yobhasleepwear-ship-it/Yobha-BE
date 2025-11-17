@@ -57,12 +57,15 @@ namespace ShoppingPlatform.Services
                 $"&EntityId={Uri.EscapeDataString(entityId)}" +
                 $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
 
+            _logger.LogDebug("DEBUG SMS message url: [{url}]", url);
+
             var providerResult = new SmsProviderResult { IsSuccess = false };
 
             try
             {
                 var resp = await _http.GetAsync(url, ct);
                 var raw = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogDebug("DEBUG SMS message raw: [{raw}]", raw);
                 providerResult.RawResponse = raw;
 
                 // parse JSON response and treat ErrorCode == "000" as success
