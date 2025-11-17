@@ -33,7 +33,7 @@ namespace ShoppingPlatform.Services
             var message = string.Format(template, otp);
 
             // DEBUG (dev only): dump the message to logs (remove in prod)
-            _logger.LogDebug("DEBUG SMS message (before encoding): [{msg}]", message);
+            _logger.LogInformation("DEBUG SMS message (before encoding): [{msg}]" + message);
 
             // Use Uri.EscapeDataString to preserve Unicode characters (en-dash) and encode newline as %0A
             var encodedMessage = Uri.EscapeDataString(message);
@@ -57,7 +57,7 @@ namespace ShoppingPlatform.Services
                 $"&EntityId={Uri.EscapeDataString(entityId)}" +
                 $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
 
-            _logger.LogDebug("DEBUG SMS message url: [{url}]", url);
+            _logger.LogInformation("DEBUG SMS message url: [{url}]"+ url);
 
             var providerResult = new SmsProviderResult { IsSuccess = false };
 
@@ -65,7 +65,7 @@ namespace ShoppingPlatform.Services
             {
                 var resp = await _http.GetAsync(url, ct);
                 var raw = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogDebug("DEBUG SMS message raw: [{raw}]", raw);
+                _logger.LogInformation("DEBUG SMS message raw: [{raw}]"+ raw);
                 providerResult.RawResponse = raw;
 
                 // parse JSON response and treat ErrorCode == "000" as success
