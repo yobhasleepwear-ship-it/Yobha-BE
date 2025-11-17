@@ -1,4 +1,5 @@
-﻿using ShoppingPlatform.DTOs;
+﻿using Newtonsoft.Json.Linq;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Repositories;
 using System.Net;
 
@@ -27,45 +28,73 @@ namespace ShoppingPlatform.Services
             var rng = new Random();
             var otp = rng.Next(100000, 999999).ToString();
 
-            // message template
-            var message = $"Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {otp}.\nPlease do not share this OTP with anyone for security reasons.\n–YOBHA";
+            // Exact template — **match DLT**: no extra spaces after en-dash
+            var template = "Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {0}.\nPlease do not share this OTP with anyone for security reasons.\n–YOBHA";
+            var message = string.Format(template, otp);
 
-            // url encode message
-            var encodedMessage = WebUtility.UrlEncode(message);
+            // DEBUG (dev only): dump the message to logs (remove in prod)
+            _logger.LogDebug("DEBUG SMS message (before encoding): [{msg}]", message);
 
-            // build url (as per provided spec). leave APIKey placeholder to be replaced by you
-            // You mentioned you'll add secretkey where needed — kept as placeholder const above.
-            //var url = $"https://www.smsgatewayhub.com/api/mt/SendSMS?APIKey={secretsDoc?.SMSAPIKEY}&senderid={_senderId}&channel=2&DCS=0&flashsms=0&number={phoneNumber}&text={encodedMessage}&route=1";
-            var url = $"https://www.smsgatewayhub.com/api/mt/SendSMS?APIKey={secretsDoc?.SMSAPIKEY}&senderid={_senderId}&channel=2&DCS=0&flashsms=0&number={phoneNumber}&text={encodedMessage}&route=47&EntityId=1101481040000090255&dlttemplateid=1107176318996242909";
-            var providerResult = new SmsProviderResult
-            {
-                IsSuccess = false
-            };
+            // Use Uri.EscapeDataString to preserve Unicode characters (en-dash) and encode newline as %0A
+            var encodedMessage = Uri.EscapeDataString(message);
+
+            var normalizedNumber = phoneNumber?.Trim() ?? "";
+            if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
+                normalizedNumber = "91" + normalizedNumber;
+
+            var apiKey = secretsDoc?.SMSAPIKEY ?? "";
+            var entityId =  "1101481040000090255";
+            var dlttemplateid =  "1107176318996242909";
+
+            var url =
+                $"https://www.smsgatewayhub.com/api/mt/SendSMS" +
+                $"?APIKey={Uri.EscapeDataString(apiKey)}" +
+                $"&senderid={Uri.EscapeDataString(_senderId)}" +
+                $"&channel=2&DCS=0&flashsms=0" +
+                $"&number={Uri.EscapeDataString(normalizedNumber)}" +
+                $"&text={encodedMessage}" +
+                $"&route=1" +
+                $"&EntityId={Uri.EscapeDataString(entityId)}" +
+                $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
+
+            var providerResult = new SmsProviderResult { IsSuccess = false };
 
             try
             {
                 var resp = await _http.GetAsync(url, ct);
                 var raw = await resp.Content.ReadAsStringAsync(ct);
-
                 providerResult.RawResponse = raw;
-                providerResult.ProviderStatus = resp.IsSuccessStatusCode ? "OK" : $"HTTP_{(int)resp.StatusCode}";
-                providerResult.IsSuccess = resp.IsSuccessStatusCode;
 
-                // Some gateways return a message id in body. We cannot be sure of format, so just save raw.
-                // If SMSGatewayHub returns something parseable, you can parse message id here:
-                providerResult.ProviderMessageId = ExtractMessageIdFromRaw(raw);
+                // parse JSON response and treat ErrorCode == "000" as success
+                try
+                {
+                    var j = JObject.Parse(raw);
+                    var errorCode = j["ErrorCode"]?.ToString();
+                    providerResult.ProviderStatus = j["ErrorMessage"]?.ToString() ?? (resp.IsSuccessStatusCode ? "OK" : $"HTTP_{(int)resp.StatusCode}");
+                    providerResult.IsSuccess = string.Equals(errorCode, "000", StringComparison.OrdinalIgnoreCase);
 
-                // SessionId: we can use a generated session id (or provider's id if available)
-                providerResult.SessionId = Guid.NewGuid().ToString("N");
+                    var messageData = j["MessageData"] as JArray;
+                    if (messageData != null && messageData.Count > 0)
+                        providerResult.ProviderMessageId = messageData[0]?["MessageId"]?.ToString();
 
-                _logger.LogInformation("Sent SMS via SMSGatewayHub phone={phoneMask} ok={ok} resp={resp}",
-                    MaskPhone(phoneNumber), providerResult.IsSuccess, Truncate(raw, 200));
+                    providerResult.SessionId = providerResult.ProviderMessageId ?? Guid.NewGuid().ToString("N");
+                }
+                catch
+                {
+                    providerResult.ProviderStatus = resp.IsSuccessStatusCode ? "OK" : $"HTTP_{(int)resp.StatusCode}";
+                    providerResult.IsSuccess = resp.IsSuccessStatusCode;
+                    providerResult.SessionId = Guid.NewGuid().ToString("N");
+                }
+
+                _logger.LogInformation("SMS send attempt for {phoneMask} accepted={accepted} status={status} msgId={mid}",
+                    MaskPhone(normalizedNumber), providerResult.IsSuccess, providerResult.ProviderStatus, providerResult.ProviderMessageId);
             }
             catch (Exception ex)
             {
                 providerResult.IsSuccess = false;
                 providerResult.ProviderStatus = "EXCEPTION";
                 providerResult.RawResponse = ex.ToString();
+                providerResult.SessionId = Guid.NewGuid().ToString("N");
                 _logger.LogError(ex, "Error calling SMSGatewayHub for {phone}", phoneNumber);
             }
 
