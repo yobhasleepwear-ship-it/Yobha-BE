@@ -28,7 +28,7 @@ namespace ShoppingPlatform.Services
             var otp = rng.Next(100000, 999999).ToString();
 
             // message template
-            var message = $"Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {otp}.\nPlease do not share this OTP with anyone for security reasons.\n– YOBHA";
+            var message = $"Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {otp}.\nPlease do not share this OTP with anyone for security reasons.\n–YOBHA";
 
             // url encode message
             var encodedMessage = WebUtility.UrlEncode(message);
