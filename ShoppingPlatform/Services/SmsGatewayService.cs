@@ -31,6 +31,7 @@ namespace ShoppingPlatform.Services
             // Exact template — **match DLT**: no extra spaces after en-dash
             var template = "Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {0}.\nPlease do not share this OTP with anyone for security reasons.\n–YOBHA";
             var message = string.Format(template, otp);
+            _logger.LogInformation("DEBUG SMS message template: [{template}]" + template);
 
             // DEBUG (dev only): dump the message to logs (remove in prod)
             _logger.LogInformation("DEBUG SMS message (before encoding): [{msg}]" + message);
