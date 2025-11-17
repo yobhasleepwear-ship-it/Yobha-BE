@@ -29,7 +29,7 @@ namespace ShoppingPlatform.Services
             var otp = rng.Next(100000, 999999).ToString();
 
             // Exact template — **match DLT**: no extra spaces after en-dash
-            var template = "Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {0}.\nPlease do not share this OTP with anyone for security reasons.\n–YOBHA";
+            var template = "Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {0}. Please do not share this OTP with anyone for security reasons.\n–YOBHA";
             var message = string.Format(template, otp);
             _logger.LogInformation("DEBUG SMS message template: [{template}]" + template);
 
@@ -53,7 +53,7 @@ namespace ShoppingPlatform.Services
                 $"&senderid={Uri.EscapeDataString(_senderId)}" +
                 $"&channel=2&DCS=0&flashsms=0" +
                 $"&number={Uri.EscapeDataString(normalizedNumber)}" +
-                $"&text={template}" +
+                $"&text={message}" +
                 $"&route=1" +
                 $"&EntityId={Uri.EscapeDataString(entityId)}" +
                 $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
