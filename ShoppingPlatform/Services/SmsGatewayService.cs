@@ -35,8 +35,8 @@ namespace ShoppingPlatform.Services
 
             // build url (as per provided spec). leave APIKey placeholder to be replaced by you
             // You mentioned you'll add secretkey where needed — kept as placeholder const above.
-            var url = $"https://www.smsgatewayhub.com/api/mt/SendSMS?APIKey={secretsDoc?.SMSAPIKEY}&senderid={_senderId}&channel=2&DCS=0&flashsms=0&number={phoneNumber}&text={encodedMessage}&route=1";
-
+            //var url = $"https://www.smsgatewayhub.com/api/mt/SendSMS?APIKey={secretsDoc?.SMSAPIKEY}&senderid={_senderId}&channel=2&DCS=0&flashsms=0&number={phoneNumber}&text={encodedMessage}&route=1";
+            var url = $"https://www.smsgatewayhub.com/api/mt/SendSMS?APIKey={secretsDoc?.SMSAPIKEY}&senderid={_senderId}&channel=2&DCS=0&flashsms=0&number={phoneNumber}&text={encodedMessage}&route=47&EntityId=1101481040000090255&dlttemplateid=1107176318996242909";
             var providerResult = new SmsProviderResult
             {
                 IsSuccess = false
