@@ -52,7 +52,7 @@ namespace ShoppingPlatform.Services
                 $"&senderid={Uri.EscapeDataString(_senderId)}" +
                 $"&channel=2&DCS=0&flashsms=0" +
                 $"&number={Uri.EscapeDataString(normalizedNumber)}" +
-                $"&text={encodedMessage}" +
+                $"&text={template}" +
                 $"&route=1" +
                 $"&EntityId={Uri.EscapeDataString(entityId)}" +
                 $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
