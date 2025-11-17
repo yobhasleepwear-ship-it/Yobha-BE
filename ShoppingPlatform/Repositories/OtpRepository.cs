@@ -40,5 +40,32 @@ namespace ShoppingPlatform.Repositories
                 Builders<OtpEntry>.Update
                     .Set(o => o.Note, note ?? "OTP reattempt at " + DateTime.UtcNow)
             );
+
+        public async Task UpdateAsync(string id, OtpEntry entry)
+        {
+            if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException(nameof(id));
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
+
+            var filter = Builders<OtpEntry>.Filter.Eq(x => x.Id, id);
+            // Ensure the Id on the entry is correct
+            entry.Id = id;
+
+            var result = await _col.ReplaceOneAsync(filter, entry, new ReplaceOptions { IsUpsert = false });
+
+            if (result.MatchedCount == 0)
+            {
+                throw new KeyNotFoundException($"OtpEntry with id '{id}' not found.");
+            }
+        }
+        public async Task<OtpEntry?> GetBySessionIdAsync(string sessionId)
+        {
+            if (string.IsNullOrWhiteSpace(sessionId)) throw new ArgumentException(nameof(sessionId));
+
+            var filter = Builders<OtpEntry>.Filter.Eq(x => x.SessionId, sessionId);
+            var sort = Builders<OtpEntry>.Sort.Descending(x => x.CreatedAt);
+
+            return await _col.Find(filter).Sort(sort).Limit(1).FirstOrDefaultAsync();
+        }
+
     }
 }

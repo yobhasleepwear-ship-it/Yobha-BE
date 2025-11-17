@@ -13,6 +13,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.DTOs;
+using ShoppingPlatform.Helpers;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Sms;
 
@@ -33,7 +34,7 @@ namespace ShoppingPlatform.Services
         private readonly ILogger<TwoFactorSmsSender> _logger;
         private readonly IHttpClientFactory _httpFactory;
         private readonly bool _useTemplate;
-
+        private readonly OtpRepository _otpRepository;
         private const string DefaultTemplateName = "SENDOTP";
         private const string DefaultSenderId = "YOBHAS";
         private readonly ISecretsRepository _secretsRepo;
@@ -43,14 +44,14 @@ namespace ShoppingPlatform.Services
             IOptions<TwoFactorSettings> opts,
             IConfiguration configuration,
             ILogger<TwoFactorSmsSender> logger,
-            IHttpClientFactory httpFactory, ISecretsRepository secretsRepo)
+            IHttpClientFactory httpFactory, ISecretsRepository secretsRepo, OtpRepository otpRepository)
         {
             _svc = svc ?? throw new ArgumentNullException(nameof(svc));
             _cfg = opts?.Value ?? new TwoFactorSettings();
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _httpFactory = httpFactory ?? throw new ArgumentNullException(nameof(httpFactory));
             _secretsRepo = secretsRepo ?? throw new ArgumentNullException(nameof(secretsRepo));
-
+            _otpRepository = otpRepository ?? throw new ArgumentNullException(nameof(otpRepository));
             // Resolve API key (same lookup strategy)
             var fromConfig = configuration["TwoFactor:ApiKey"];
             var fromSettings = _cfg?.ApiKey;
@@ -79,6 +80,7 @@ namespace ShoppingPlatform.Services
             }
 
             _logger.LogInformation("TwoFactor mode: UseTemplate={useTemplate}", _useTemplate);
+            _otpRepository = otpRepository;
         }
 
         /// <summary>
@@ -276,16 +278,88 @@ namespace ShoppingPlatform.Services
             }
         }
 
+
         public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
         {
-            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("OTP");
+            if (string.IsNullOrWhiteSpace(sessionId)) throw new ArgumentException("sessionId");
+            if (string.IsNullOrWhiteSpace(otp)) throw new ArgumentException("otp");
 
-            if (string.IsNullOrWhiteSpace(secretsDoc?.SMSAPIKEY))
-                throw new InvalidOperationException("TwoFactor API key is not configured.");
+            try
+            {
+                // fetch the OTP entry by sessionId
+                var entry = await _otpRepository.GetBySessionIdAsync(sessionId);
+                if (entry == null)
+                {
+                    _logger.LogInformation("VerifyOtp: no entry found for session {session}", sessionId);
+                    return false;
+                }
 
-            // delegate verify call to TwoFactorService (existing behavior)
-            return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+                // already used?
+                if (entry.IsVerified)
+                {
+                    _logger.LogInformation("VerifyOtp: entry already verified session={session} id={id}", sessionId, entry.Id);
+                    return false;
+                }
+
+                // expired?
+                if (DateTime.UtcNow > entry.ExpiresAt)
+                {
+                    _logger.LogInformation("VerifyOtp: entry expired session={session} id={id} expiresAt={exp}", sessionId, entry.Id, entry.ExpiresAt);
+                    return false;
+                }
+
+                // too many attempts?
+                entry.AttemptCount = entry.AttemptCount + 1;
+                if (entry.AttemptCount > (entry.MaxAttempts <= 0 ? 5 : entry.MaxAttempts))
+                {
+                    // persist attempt increment
+                    await _otpRepository.UpdateAsync(entry.Id!, entry);
+                    _logger.LogWarning("VerifyOtp: max attempts exceeded for session={session} id={id}", sessionId, entry.Id);
+                    return false;
+                }
+
+                // verify hash (timing-safe comparison inside helper)
+                var isValid = OtpHashHelper.Verify(otp, entry.OtpHash);
+
+                if (!isValid)
+                {
+                    // update attempt count and return false
+                    await _otpRepository.UpdateAsync(entry.Id!, entry);
+                    _logger.LogInformation("VerifyOtp: invalid OTP for session={session} id={id} attempts={attempts}", sessionId, entry.Id, entry.AttemptCount);
+                    return false;
+                }
+
+                // success -> mark verified and persist
+                entry.IsVerified = true;
+                entry.VerifiedAt = DateTime.UtcNow;
+                // optional: clear hash for safety, or keep for audit
+                // entry.OtpHash = null; // if you want to remove it
+                await _otpRepository.UpdateAsync(entry.Id!, entry);
+
+                _logger.LogInformation("VerifyOtp: success for session={session} id={id}", sessionId, entry.Id);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "VerifyOtp: unexpected error for session={session}", sessionId);
+                // On unexpected error, return false (or rethrow depending on your desired behavior)
+                return false;
+            }
         }
+
+
+        //public async Task<bool> VerifyOtpAsync(string sessionId, string otp)
+        //{
+        //    var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("OTP");
+
+        //    if (string.IsNullOrWhiteSpace(secretsDoc?.SMSAPIKEY))
+        //        throw new InvalidOperationException("TwoFactor API key is not configured.");
+
+        //    // delegate verify call to TwoFactorService (existing behavior)
+        //    return await _svc.VerifyOtpAsync(_apiKey, sessionId, otp);
+        //}
+
+
 
         // ---------------- helpers ----------------
         private static string Truncate(string? s, int length) => string.IsNullOrEmpty(s) ? string.Empty : (s.Length <= length ? s : s.Substring(0, length) + "...");

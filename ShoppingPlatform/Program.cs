@@ -144,6 +144,8 @@ builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<IReturnRepository, ReturnRepository>();
+builder.Services.AddScoped<ISmsGatewayService, SmsGatewayService>();
+
 
 
 // Add memory cache (used by PaymentHelper)

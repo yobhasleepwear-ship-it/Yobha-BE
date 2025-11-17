@@ -32,4 +32,13 @@
         public string expiryTime { get; set; }
     }
 
+    public class SmsProviderResult
+    {
+        public bool IsSuccess { get; set; }
+        public string ProviderStatus { get; set; } = string.Empty;
+        public string? ProviderMessageId { get; set; }
+        public string? RawResponse { get; set; }
+        public string SessionId { get; set; } = string.Empty;
+        // note: we do NOT return actual OTP here
+    }
 }
