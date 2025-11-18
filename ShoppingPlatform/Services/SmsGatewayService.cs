@@ -28,17 +28,10 @@ namespace ShoppingPlatform.Services
             var rng = new Random();
             var otp = rng.Next(100000, 999999).ToString();
 
-            // Exact template — **match DLT**: no extra spaces after en-dash
-            var template = "Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {0}. Please do not share this OTP with anyone for security reasons.\n–YOBHA";
-            var template2 = $"Dear Customer,\nYour one-time password (OTP) for login to YOBHA is {otp}. Please do not share this OTP with anyone for security reasons.\n–YOBHA";
+            // Exact working template (single line, no newline, no unicode dash)
+            var message = $"Dear Customer, Your one-time password (OTP) for login to YOBHA website is {otp}. Please do not share this OTP with anyone for security reasons. -YOBHA";
 
-            var message = string.Format(template, otp);
-            _logger.LogInformation("DEBUG SMS message template: [{template}]" + template);
-
-            // DEBUG (dev only): dump the message to logs (remove in prod)
-            _logger.LogInformation("DEBUG SMS message (before encoding): [{msg}]" + message);
-
-            // Use Uri.EscapeDataString to preserve Unicode characters (en-dash) and encode newline as %0A
+            // URL encode text
             var encodedMessage = Uri.EscapeDataString(message);
 
             var normalizedNumber = phoneNumber?.Trim() ?? "";
@@ -46,8 +39,8 @@ namespace ShoppingPlatform.Services
                 normalizedNumber = "91" + normalizedNumber;
 
             var apiKey = secretsDoc?.SMSAPIKEY ?? "";
-            var entityId =  "1101481040000090255";
-            var dlttemplateid =  "1107176318996242909";
+            var entityId = "1101481040000090255";
+            var dlttemplateid = "1107176318996242909";
 
             var url =
                 $"https://www.smsgatewayhub.com/api/mt/SendSMS" +
@@ -55,12 +48,12 @@ namespace ShoppingPlatform.Services
                 $"&senderid={Uri.EscapeDataString(_senderId)}" +
                 $"&channel=2&DCS=0&flashsms=0" +
                 $"&number={Uri.EscapeDataString(normalizedNumber)}" +
-                $"&text={message}" +
-                $"&route=47" +
+                $"&text={encodedMessage}" +
+                $"&route=1" +
                 $"&EntityId={Uri.EscapeDataString(entityId)}" +
                 $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
 
-            _logger.LogInformation("DEBUG SMS message url: [{url}]"+ url);
+            _logger.LogInformation("DEBUG SMS message url: [{url}]" + url);
 
             var providerResult = new SmsProviderResult { IsSuccess = false };
 
@@ -68,10 +61,8 @@ namespace ShoppingPlatform.Services
             {
                 var resp = await _http.GetAsync(url, ct);
                 var raw = await resp.Content.ReadAsStringAsync(ct);
-                _logger.LogInformation("DEBUG SMS message raw: [{raw}]"+ raw);
                 providerResult.RawResponse = raw;
 
-                // parse JSON response and treat ErrorCode == "000" as success
                 try
                 {
                     var j = JObject.Parse(raw);
@@ -91,9 +82,6 @@ namespace ShoppingPlatform.Services
                     providerResult.IsSuccess = resp.IsSuccessStatusCode;
                     providerResult.SessionId = Guid.NewGuid().ToString("N");
                 }
-
-                _logger.LogInformation("SMS send attempt for {phoneMask} accepted={accepted} status={status} msgId={mid}",
-                    MaskPhone(normalizedNumber), providerResult.IsSuccess, providerResult.ProviderStatus, providerResult.ProviderMessageId);
             }
             catch (Exception ex)
             {
@@ -101,7 +89,6 @@ namespace ShoppingPlatform.Services
                 providerResult.ProviderStatus = "EXCEPTION";
                 providerResult.RawResponse = ex.ToString();
                 providerResult.SessionId = Guid.NewGuid().ToString("N");
-                _logger.LogError(ex, "Error calling SMSGatewayHub for {phone}", phoneNumber);
             }
 
             return (providerResult, otp);
