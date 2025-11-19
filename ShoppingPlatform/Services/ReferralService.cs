@@ -12,13 +12,14 @@ namespace ShoppingPlatform.Services
         private readonly IMongoDatabase _db;
         private readonly IMongoCollection<User> _users;
         private readonly int _pointsToAward;
-
-        public ReferralService(IReferralRepository refRepo, IMongoDatabase db, int pointsToAward = 500)
+        private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
+        public ReferralService(IReferralRepository refRepo, IMongoDatabase db,ILoyaltyPointAuditService loyaltyPointAuditService, int pointsToAward = 500)
         {
             _refRepo = refRepo;
             _db = db;
             _users = db.GetCollection<User>("users");
             _pointsToAward = pointsToAward;
+            _loyaltyPointAuditService =  loyaltyPointAuditService;
         }
 
         /// <summary>
@@ -92,7 +93,7 @@ namespace ShoppingPlatform.Services
                     await session.AbortTransactionAsync();
                     return (false, "Failed to update referrer points");
                 }
-
+                var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(referral.ReferrerUserId, "Credit", _pointsToAward, "Referral", null, email, phone, newPoints);
                 await session.CommitTransactionAsync();
                 return (true, null);
             }
@@ -127,6 +128,10 @@ namespace ShoppingPlatform.Services
                         // compensation left as TODO: implement UndoMarkRedeemed if you need strict consistency
                         return (false, "Referrer user not found (fallback update failed)");
                     }
+
+
+                    var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(referral.ReferrerUserId,"Credit", _pointsToAward, "Referral", null, email, phone,newPts);
+
                     return (true, null);
                 }
                 catch (Exception e2)

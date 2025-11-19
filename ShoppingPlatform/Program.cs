@@ -145,6 +145,7 @@ builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<IReturnRepository, ReturnRepository>();
 builder.Services.AddScoped<ISmsGatewayService, SmsGatewayService>();
+builder.Services.AddScoped<ILoyaltyPointAuditService, LoyaltyPointAuditService>();
 
 
 
@@ -158,6 +159,7 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetColl
 // products collection is accessed directly in repository from IMongoDatabase, still okay, but nothing wrong registering it:
 builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<Product>("products"));
 builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<ReturnOrder>("returnorders"));
+builder.Services.AddScoped(sp => sp.GetRequiredService<IMongoDatabase>().GetCollection<LoyaltyPointAudit>("loyaltyPointAudits"));
 
 
 // Register GiftCardHelper & PaymentHelper as typed clients/services

@@ -14,14 +14,15 @@ namespace ShoppingPlatform.Services
         private readonly IMongoCollection<User> _userCollection;
         private readonly IMongoClient _mongoClient;
         private readonly PaymentHelper _paymentHelper;
+        private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
 
-
-        public BuybackService(IMongoDatabase database, IMongoClient mongoClient, PaymentHelper paymentHelper)
+        public BuybackService(IMongoDatabase database, IMongoClient mongoClient, PaymentHelper paymentHelper, ILoyaltyPointAuditService loyaltyPointAuditService)
         {
             _buybackCollection = database.GetCollection<BuybackRequest>("Buyback");
             _userCollection = database.GetCollection<User>("users");
             _mongoClient = mongoClient;
             _paymentHelper = paymentHelper;
+            _loyaltyPointAuditService = loyaltyPointAuditService;
         }
 
         /// <summary>
@@ -139,6 +140,7 @@ namespace ShoppingPlatform.Services
                         await session.AbortTransactionAsync();
                         throw new KeyNotFoundException($"User {existing.UserId} not found to credit loyalty points.");
                     }
+                    var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(existing.UserId, "Credit", pts, "BuyBack", null, user.Email, user.PhoneNumber, user.LoyaltyPoints);
 
                     await session.CommitTransactionAsync();
 

@@ -185,19 +185,16 @@ namespace ShoppingPlatform.Repositories
             var result = await _collection.UpdateOneAsync(Builders<User>.Filter.Eq(u => u.Id, userId), update);
             return result.ModifiedCount > 0;
         }
-        public async Task<bool> TryDeductLoyaltyPointsAsync(string userId, decimal pointsToDeduct)
+        public async Task<decimal> TryDeductLoyaltyPointsAsync(string userId, decimal pointsToDeduct)
         {
-            if (string.IsNullOrWhiteSpace(userId) || pointsToDeduct <= 0) return false;
-
             // Atomic update: only decrement if current LoyaltyPoints >= pointsToDeduct
-            var filter = Builders<User>.Filter.And(
-                Builders<User>.Filter.Eq(u => u.Id, userId),
-                Builders<User>.Filter.Gte(u => u.LoyaltyPoints, pointsToDeduct)
-            );
+            var filter = Builders<User>.Filter.Eq(u => u.Id, userId);
 
             var update = Builders<User>.Update.Inc(u => u.LoyaltyPoints, -pointsToDeduct);
             var res = await _collection.UpdateOneAsync(filter, update);
-            return res.ModifiedCount > 0;
+            var cursor = await _collection.FindAsync(filter);
+            var user = await cursor.FirstOrDefaultAsync();
+            return user.LoyaltyPoints??0m;
         }
 
         public async Task<bool> IncrementLoyaltyPointsAsync(string userId, int pointsToAdd)

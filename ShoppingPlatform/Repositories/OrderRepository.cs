@@ -11,6 +11,7 @@ using System.Diagnostics.Metrics;
 using ShoppingPlatform.Helpers;
 using Xunit.Sdk;
 using System.Text.RegularExpressions;
+using ShoppingPlatform.Services;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -26,12 +27,15 @@ namespace ShoppingPlatform.Repositories
         private readonly GiftCardHelper _giftCardHelper;
         private readonly PaymentHelper _paymentHelper;
         //private readonly IMongoCollection<GiftCard> _giftCardCollection;
+        UserRepository _userRepository;
+        private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
 
 
         public OrderRepository(IMongoDatabase db, IMongoClient mongoClient, IHttpClientFactory httpClientFactory,
         IConfiguration configuration,GiftCardHelper giftCardHelper,
                         PaymentHelper paymentHelper
                         //,IMongoCollection<GiftCard> giftCardCollection
+                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService
             )
         {
             _products = db.GetCollection<Product>("products");
@@ -44,6 +48,8 @@ namespace ShoppingPlatform.Repositories
             _giftCardHelper = giftCardHelper;
             _paymentHelper = paymentHelper;
             //_giftCardCollection = giftCardCollection;
+            _userRepository = userRepository;
+            _loyaltyPointAuditService = loyaltyPointAuditService;
         }
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
@@ -528,6 +534,12 @@ namespace ShoppingPlatform.Repositories
                             GiftCardNumber = order.GiftCardNumber,
                         };
 
+                        if (req.LoyaltyDiscountAmount != null && req.LoyaltyDiscountAmount > 0)
+                        {
+                            var pts = await _userRepository.TryDeductLoyaltyPointsAsync(order.UserId, (req.LoyaltyDiscountAmount ?? 0m));
+                            var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(order.UserId, "Debit", req.LoyaltyDiscountAmount ?? 0m, "Referral", null, order.Email, null, pts);
+
+                        }
                         return responseDto;
                     }
 

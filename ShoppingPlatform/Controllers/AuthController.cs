@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 using System.Text;
+using System.Security.Claims;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -35,6 +36,7 @@ namespace ShoppingPlatform.Controllers
         private readonly ReferralService _referralService;
         private readonly ILogger<AuthController> _logger;
         private readonly ISmsGatewayService _smsGatewayService;
+        private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
 
         public AuthController(
             UserRepository users,
@@ -46,7 +48,8 @@ namespace ShoppingPlatform.Controllers
             IConfiguration config,
             ReferralService referralService,
             ILogger<AuthController> logger,
-            ISmsGatewayService smsGatewayService)
+            ISmsGatewayService smsGatewayService,
+            ILoyaltyPointAuditService loyaltyPointAuditService)
         {
             _users = users;
             _otps = otps;
@@ -58,6 +61,7 @@ namespace ShoppingPlatform.Controllers
             _referralService = referralService;
             _logger = logger;
             _smsGatewayService = smsGatewayService;
+            _loyaltyPointAuditService = loyaltyPointAuditService;
         }
 
         // -----------------------
@@ -942,6 +946,22 @@ namespace ShoppingPlatform.Controllers
 
             var user = await _users.GetByIdAsync(uid);
             return Ok(ApiResponse<User>.Ok(user!, "Name updated"));
+        }
+
+
+        [HttpGet("loyalty-audit")]
+        [Authorize]
+        public async Task<IActionResult> GetMyLoyaltyAudit([FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+        {
+            // Try common claim types for user id; adjust if you use a custom claim key
+            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Forbid(); // or return Unauthorized();
+
+            var result = await _loyaltyPointAuditService.GetForUserAsync(userId, page, pageSize);
+            return Ok(result);
         }
 
     }
