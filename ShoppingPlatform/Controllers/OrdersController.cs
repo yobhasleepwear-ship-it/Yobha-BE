@@ -57,7 +57,9 @@ namespace ShoppingPlatform.Controllers
         [Authorize]
         public async Task<ActionResult<ApiResponse<IEnumerable<Order>>>> GetForUser()
         {
-            var userId = User.GetUserIdOrAnonymous();
+            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+
+            //var userId = User.GetUserIdOrAnonymous();
             var list = await _orderRepo.GetForUserAsync(userId);
 
             var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
