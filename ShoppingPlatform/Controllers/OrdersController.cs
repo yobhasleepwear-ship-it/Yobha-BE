@@ -53,17 +53,41 @@ namespace ShoppingPlatform.Controllers
         // -------------------------------------------
         // GET: api/orders
         // -------------------------------------------
+        //[HttpGet]
+        //[Authorize]
+        //public async Task<ActionResult<ApiResponse<IEnumerable<Order>>>> GetForUser()
+        //{
+        //    var userId = User.GetUserIdOrAnonymous();
+        //    var list = await _orderRepo.GetForUserAsync(userId);
+
+        //    var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
+        //    return Ok(response);
+        //}
+
         [HttpGet]
         [Authorize]
-        public async Task<ActionResult<ApiResponse<IEnumerable<Order>>>> GetForUser()
+        public async Task<IActionResult> GetOrders()
         {
-            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirst("uid")?.Value;
+            try
+            {
+                // existing logic
+                var list = await _orderRepo.GetForUserAsync(userId);
+                var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                // Log full exception + user id + user document snapshot
+                _logger.LogError(ex, "Orders API failed for user {UserId}. Dumping user document for debug", userId);
 
-            //var userId = User.GetUserIdOrAnonymous();
-            var list = await _orderRepo.GetForUserAsync(userId);
+                // Optional: fetch and log the user doc (serialize safe fields)
+                var user = await _userRepo.GetByIdAsync(userId);
+                _logger.LogError("User dump: {@User}", user);
 
-            var response = ApiResponse<IEnumerable<Order>>.Ok(list, "Orders fetched successfully");
-            return Ok(response);
+                // Return generic 500 to caller
+                return StatusCode(500, new { success = false, message = "Internal server error" });
+            }
         }
 
         // -------------------------------------------
