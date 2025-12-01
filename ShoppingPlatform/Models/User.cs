@@ -42,6 +42,8 @@ namespace ShoppingPlatform.Models
         // ===== Optional state flags =====
         public bool IsActive { get; set; } = true;
         public bool IsDeleted { get; set; } = false;
+
+        [BsonRepresentation(BsonType.Decimal128)]
         public decimal? LoyaltyPoints { get; set; }
         // -------------------------
         // Helper methods for refresh tokens
