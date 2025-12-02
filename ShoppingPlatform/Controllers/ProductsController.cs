@@ -54,7 +54,7 @@ namespace ShoppingPlatform.Controllers
             if (page <= 0) page = 1;
             if (pageSize <= 0) pageSize = 20;
 
-            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, fabric, page, pageSize, sort);
+            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, fabric, page, pageSize, sort, country);
 
             var paged = new PagedResult<ProductListItemDto>
             {

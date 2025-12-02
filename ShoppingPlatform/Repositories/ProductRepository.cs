@@ -103,6 +103,200 @@ namespace ShoppingPlatform.Repositories
         }
 
 
+        public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(
+            string? q,
+            string? category,
+            string? subCategory,
+            decimal? minPrice,
+            decimal? maxPrice,
+            List<string>? fabric,
+            int page,
+            int pageSize,
+            string? sort,
+            string? country // new param
+        )
+        {
+            var builder = Builders<Product>.Filter;
+            var filters = new List<FilterDefinition<Product>>();
+
+            // Base filters
+            filters.Add(builder.Eq(p => p.IsActive, true));
+            filters.Add(builder.Eq(p => p.IsDeleted, false));
+
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var qLower = q.Trim();
+                var nameFilter = builder.Regex(p => p.Name, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                var descFilter = builder.Regex(p => p.Description, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                var slugFilter = builder.Regex(p => p.Slug, new MongoDB.Bson.BsonRegularExpression(qLower, "i"));
+                filters.Add(builder.Or(nameFilter, descFilter, slugFilter));
+            }
+
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                var cat = category.Trim();
+                var catFilter = builder.Or(
+                    builder.Eq(p => p.ProductCategory, cat),
+                    builder.Eq(p => p.ProductSubCategory, cat),
+                    builder.Eq(p => p.ProductMainCategory, cat)
+                );
+                filters.Add(catFilter);
+            }
+
+            if (!string.IsNullOrWhiteSpace(subCategory))
+            {
+                var subCat = subCategory.Trim();
+                var subCatFilter = builder.Eq(p => p.ProductCategory, subCat);
+                filters.Add(subCatFilter);
+            }
+
+            if (fabric != null && fabric.Any())
+            {
+                var fabricfilter = builder.AnyIn(p => p.FabricType, fabric);
+                filters.Add(fabricfilter);
+            }
+
+            // PRICE FILTER: Only apply on PriceList (not CountryPrices)
+            if (minPrice.HasValue || maxPrice.HasValue)
+            {
+                var priceInnerFilters = new List<FilterDefinition<Price>>();
+
+                // If country provided, require PriceList.Country == country for the matched element
+                if (!string.IsNullOrWhiteSpace(country))
+                {
+                    priceInnerFilters.Add(Builders<Price>.Filter.Eq(p => p.Country, country));
+                }
+
+                if (minPrice.HasValue)
+                {
+                    priceInnerFilters.Add(Builders<Price>.Filter.Gte(p => p.PriceAmount, minPrice.Value));
+                }
+
+                if (maxPrice.HasValue)
+                {
+                    priceInnerFilters.Add(Builders<Price>.Filter.Lte(p => p.PriceAmount, maxPrice.Value));
+                }
+
+                if (priceInnerFilters.Count > 0)
+                {
+                    var combinedPriceInner = Builders<Price>.Filter.And(priceInnerFilters);
+                    var elemMatch = builder.ElemMatch(p => p.PriceList, combinedPriceInner);
+                    filters.Add(elemMatch);
+                }
+            }
+
+            var combinedFilter = filters.Count > 0 ? builder.And(filters) : builder.Empty;
+
+            // total count using same filter
+            var total = await _collection.CountDocumentsAsync(combinedFilter);
+
+            // If sorting by price, we need an aggregation pipeline that computes an effectivePrice from PriceList
+            var skip = (page - 1) * pageSize;
+
+            // Determine if we should use price-based sorting
+            var sortDef = sort ?? string.Empty;
+            var usePriceSort = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase)
+                            || sortDef.Equals("price_desc", StringComparison.OrdinalIgnoreCase);
+
+            if (usePriceSort)
+            {
+                // Build aggregation pipeline:
+                // 1. $match combinedFilter
+                // 2. $addFields: effectivePrice = min( mapped PriceList.PriceAmount after optionally filtering by country )
+                // 3. $sort by effectivePrice (asc/desc)
+                // 4. $skip / $limit
+                // We'll keep the whole product document and map later.
+
+                // Build Bson for country filter logic inside $filter
+                BsonDocument priceFilterExpr;
+                if (!string.IsNullOrWhiteSpace(country))
+                {
+                    // Filter PriceList where Country == country
+                    priceFilterExpr = new BsonDocument("$filter", new BsonDocument
+            {
+                { "input", "$PriceList" },
+                { "as", "pl" },
+                { "cond", new BsonDocument("$eq", new BsonArray { "$$pl.Country", country }) }
+            });
+                }
+                else
+                {
+                    // No country: use whole PriceList
+                    priceFilterExpr = new BsonDocument("$ifNull", new BsonArray { "$PriceList", new BsonArray() });
+                }
+
+                // Map filtered PriceList to array of PriceAmount values (if empty -> null)
+                var mapExpr = new BsonDocument("$map", new BsonDocument
+        {
+            { "input", priceFilterExpr },
+            { "as", "p" },
+            { "in", "$$p.PriceAmount" }
+        });
+
+                // effectivePrice: take $min of the mapped array (if empty, it will be null)
+                var addFieldsStage = new BsonDocument("$addFields", new BsonDocument
+        {
+            { "effectivePrice", new BsonDocument("$min", mapExpr) }
+        });
+
+                // match stage
+                var matchStage = new BsonDocument("$match", combinedFilter.ToBsonDocument());
+
+                // sort stage (handle nulls by leaving them; they will sort after numbers)
+                var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
+                var sortStage = new BsonDocument("$sort", new BsonDocument("effectivePrice", sortDirection));
+
+                // In addition to price sort, to keep deterministic order for equal prices, also sort by CreatedAt desc
+                var sortStageCombined = new BsonDocument("$sort", new BsonDocument
+        {
+            { "effectivePrice", sortDirection },
+            { "CreatedAt", -1 }
+        });
+
+                var pipeline = new[]
+                {
+            matchStage,
+            addFieldsStage,
+            sortStageCombined,
+            new BsonDocument("$skip", skip),
+            new BsonDocument("$limit", pageSize)
+        };
+
+                var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
+                for (int i = 1; i < pipeline.Length; i++)
+                {
+                    agg = agg.AppendStage<Product>(pipeline[i]);
+                }
+
+                var productsCursor = await agg.ToListAsync();
+                var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                return (mapped, total);
+            }
+            else
+            {
+                // Not sorting by price: do simple find with the same combinedFilter and the existing sort mappings.
+                var sortDefBuilder = Builders<Product>.Sort;
+                SortDefinition<Product> sortDefFinal = sort switch
+                {
+                    "popular" => sortDefBuilder.Descending(p => p.SalesCount),
+                    "price_asc" => sortDefBuilder.Ascending(p => p.Price),    // legacy: top-level Price (kept, but user asked price-list sort only when requested)
+                    "price_desc" => sortDefBuilder.Descending(p => p.Price),
+                    _ => sortDefBuilder.Descending(p => p.CreatedAt)
+                };
+
+                var productsCursor = await _collection.Find(combinedFilter)
+                    .Sort(sortDefFinal)
+                    .Skip(skip)
+                    .Limit(pageSize)
+                    .ToListAsync();
+
+                var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                return (mapped, total);
+            }
+        }
+
+
+
 
         // -----------------------
         // GetById / GetByProductId / Exists
