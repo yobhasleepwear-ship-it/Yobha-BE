@@ -104,17 +104,18 @@ namespace ShoppingPlatform.Repositories
 
 
         public async Task<(List<ProductListItemDto> items, long total)> QueryAsync(
-            string? q,
-            string? category,
-            string? subCategory,
-            decimal? minPrice,
-            decimal? maxPrice,
-            List<string>? fabric,
-            int page,
-            int pageSize,
-            string? sort,
-            string? country // new param
-        )
+    string? q,
+    string? category,
+    string? subCategory,
+    decimal? minPrice,
+    decimal? maxPrice,
+    List<string>? fabric,
+    int page,
+    int pageSize,
+    string? sort,
+    string? country, // new param
+    List<string>? color
+)
         {
             var builder = Builders<Product>.Filter;
             var filters = new List<FilterDefinition<Product>>();
@@ -123,6 +124,7 @@ namespace ShoppingPlatform.Repositories
             filters.Add(builder.Eq(p => p.IsActive, true));
             filters.Add(builder.Eq(p => p.IsDeleted, false));
 
+            // Text search on name/description/slug
             if (!string.IsNullOrWhiteSpace(q))
             {
                 var qLower = q.Trim();
@@ -132,6 +134,7 @@ namespace ShoppingPlatform.Repositories
                 filters.Add(builder.Or(nameFilter, descFilter, slugFilter));
             }
 
+            // Category / subcategory filters
             if (!string.IsNullOrWhiteSpace(category))
             {
                 var cat = category.Trim();
@@ -150,18 +153,24 @@ namespace ShoppingPlatform.Repositories
                 filters.Add(subCatFilter);
             }
 
+            // Fabric filter
             if (fabric != null && fabric.Any())
             {
-                var fabricfilter = builder.AnyIn(p => p.FabricType, fabric);
-                filters.Add(fabricfilter);
+                filters.Add(builder.AnyIn(p => p.FabricType, fabric));
+            }
+
+            // Colour filter (added)
+            if (color != null && color.Any())
+            {
+                // assuming Product has a list property named Colors (adjust property name if different)
+                filters.Add(builder.AnyIn(p => p.AvailableColors, color));
             }
 
             // PRICE FILTER: Only apply on PriceList (not CountryPrices)
-            if (minPrice.HasValue || maxPrice.HasValue)
+            if (minPrice.HasValue || maxPrice.HasValue || !string.IsNullOrWhiteSpace(country))
             {
                 var priceInnerFilters = new List<FilterDefinition<Price>>();
 
-                // If country provided, require PriceList.Country == country for the matched element
                 if (!string.IsNullOrWhiteSpace(country))
                 {
                     priceInnerFilters.Add(Builders<Price>.Filter.Eq(p => p.Country, country));
@@ -177,11 +186,11 @@ namespace ShoppingPlatform.Repositories
                     priceInnerFilters.Add(Builders<Price>.Filter.Lte(p => p.PriceAmount, maxPrice.Value));
                 }
 
+                // Only add ElemMatch when we actually have constraints to apply to PriceList
                 if (priceInnerFilters.Count > 0)
                 {
                     var combinedPriceInner = Builders<Price>.Filter.And(priceInnerFilters);
-                    var elemMatch = builder.ElemMatch(p => p.PriceList, combinedPriceInner);
-                    filters.Add(elemMatch);
+                    filters.Add(builder.ElemMatch(p => p.PriceList, combinedPriceInner));
                 }
             }
 
@@ -190,10 +199,10 @@ namespace ShoppingPlatform.Repositories
             // total count using same filter
             var total = await _collection.CountDocumentsAsync(combinedFilter);
 
-            // If sorting by price, we need an aggregation pipeline that computes an effectivePrice from PriceList
-            var skip = (page - 1) * pageSize;
+            // paging
+            var skip = Math.Max(0, (page - 1)) * pageSize;
 
-            // Determine if we should use price-based sorting
+            // Determine if use price-based sorting
             var sortDef = sort ?? string.Empty;
             var usePriceSort = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase)
                             || sortDef.Equals("price_desc", StringComparison.OrdinalIgnoreCase);
@@ -202,17 +211,15 @@ namespace ShoppingPlatform.Repositories
             {
                 // Build aggregation pipeline:
                 // 1. $match combinedFilter
-                // 2. $addFields: effectivePrice = min( mapped PriceList.PriceAmount after optionally filtering by country )
-                // 3. $sort by effectivePrice (asc/desc)
+                // 2. $addFields effectivePrice = min(map(filtered PriceList -> PriceAmount)) or fallback to top-level Price
+                // 3. $sort by effectivePrice (asc/desc), then CreatedAt desc
                 // 4. $skip / $limit
-                // We'll keep the whole product document and map later.
 
-                // Build Bson for country filter logic inside $filter
-                BsonDocument priceFilterExpr;
+                // Build price list filter expression: if country specified, filter PriceList by country; else use whole PriceList
+                BsonDocument priceListFilteredExpr;
                 if (!string.IsNullOrWhiteSpace(country))
                 {
-                    // Filter PriceList where Country == country
-                    priceFilterExpr = new BsonDocument("$filter", new BsonDocument
+                    priceListFilteredExpr = new BsonDocument("$filter", new BsonDocument
             {
                 { "input", "$PriceList" },
                 { "as", "pl" },
@@ -221,43 +228,40 @@ namespace ShoppingPlatform.Repositories
                 }
                 else
                 {
-                    // No country: use whole PriceList
-                    priceFilterExpr = new BsonDocument("$ifNull", new BsonArray { "$PriceList", new BsonArray() });
+                    // use whole PriceList (if null -> empty array)
+                    priceListFilteredExpr = new BsonDocument("$ifNull", new BsonArray { "$PriceList", new BsonArray() });
                 }
 
-                // Map filtered PriceList to array of PriceAmount values (if empty -> null)
-                var mapExpr = new BsonDocument("$map", new BsonDocument
+                // Map filtered price list to numeric amounts
+                var priceAmountsMap = new BsonDocument("$map", new BsonDocument
         {
-            { "input", priceFilterExpr },
+            { "input", priceListFilteredExpr },
             { "as", "p" },
             { "in", "$$p.PriceAmount" }
         });
 
-                // effectivePrice: take $min of the mapped array (if empty, it will be null)
-                var addFieldsStage = new BsonDocument("$addFields", new BsonDocument
+                // effectivePrice: try min(priceAmounts), if null fallback to top-level Price
+                var effectivePriceExpr = new BsonDocument("$ifNull", new BsonArray
         {
-            { "effectivePrice", new BsonDocument("$min", mapExpr) }
+            new BsonDocument("$min", priceAmountsMap),
+            "$Price"
         });
 
-                // match stage
                 var matchStage = new BsonDocument("$match", combinedFilter.ToBsonDocument());
+                var addFieldsStage = new BsonDocument("$addFields", new BsonDocument { { "effectivePrice", effectivePriceExpr } });
 
-                // sort stage (handle nulls by leaving them; they will sort after numbers)
                 var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
-                var sortStage = new BsonDocument("$sort", new BsonDocument("effectivePrice", sortDirection));
-
-                // In addition to price sort, to keep deterministic order for equal prices, also sort by CreatedAt desc
-                var sortStageCombined = new BsonDocument("$sort", new BsonDocument
+                var sortStage = new BsonDocument("$sort", new BsonDocument
         {
             { "effectivePrice", sortDirection },
-            { "CreatedAt", -1 }
+            { "CreatedAt", -1 } // deterministic fallback
         });
 
                 var pipeline = new[]
                 {
             matchStage,
             addFieldsStage,
-            sortStageCombined,
+            sortStage,
             new BsonDocument("$skip", skip),
             new BsonDocument("$limit", pageSize)
         };
@@ -274,12 +278,12 @@ namespace ShoppingPlatform.Repositories
             }
             else
             {
-                // Not sorting by price: do simple find with the same combinedFilter and the existing sort mappings.
+                // Not price-sort: use regular Find with standard sorts
                 var sortDefBuilder = Builders<Product>.Sort;
                 SortDefinition<Product> sortDefFinal = sort switch
                 {
                     "popular" => sortDefBuilder.Descending(p => p.SalesCount),
-                    "price_asc" => sortDefBuilder.Ascending(p => p.Price),    // legacy: top-level Price (kept, but user asked price-list sort only when requested)
+                    "price_asc" => sortDefBuilder.Ascending(p => p.Price),
                     "price_desc" => sortDefBuilder.Descending(p => p.Price),
                     _ => sortDefBuilder.Descending(p => p.CreatedAt)
                 };
@@ -294,6 +298,7 @@ namespace ShoppingPlatform.Repositories
                 return (mapped, total);
             }
         }
+
 
 
 

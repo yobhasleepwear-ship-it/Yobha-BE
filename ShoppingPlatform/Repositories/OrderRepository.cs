@@ -379,6 +379,13 @@ namespace ShoppingPlatform.Repositories
 
                     await _col.InsertOneAsync(session, order);
 
+                    if (req.LoyaltyDiscountAmount != null && req.LoyaltyDiscountAmount > 0)
+                    {
+                        var pts = await _userRepository.TryDeductLoyaltyPointsAsync(order.UserId, (req.LoyaltyDiscountAmount ?? 0m));
+                        var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(order.UserId, "Debit", req.LoyaltyDiscountAmount ?? 0m, "Referral", null, order.Email, null, pts);
+
+                    }
+
                     //foreach (var oi in orderItems)
                     //{
                     //    var prodFilter = Builders<Product>.Filter.And(
@@ -533,13 +540,7 @@ namespace ShoppingPlatform.Repositories
                             Total = order.Total,
                             GiftCardNumber = order.GiftCardNumber,
                         };
-
-                        if (req.LoyaltyDiscountAmount != null && req.LoyaltyDiscountAmount > 0)
-                        {
-                            var pts = await _userRepository.TryDeductLoyaltyPointsAsync(order.UserId, (req.LoyaltyDiscountAmount ?? 0m));
-                            var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(order.UserId, "Debit", req.LoyaltyDiscountAmount ?? 0m, "Referral", null, order.Email, null, pts);
-
-                        }
+                      
                         return responseDto;
                     }
 
@@ -663,5 +664,44 @@ namespace ShoppingPlatform.Repositories
             var result = await _col.UpdateOneAsync(filter, update);
             return result.ModifiedCount > 0;
         }
+
+        public async Task<bool> updateOrderForReturn(string orderNumber, List<OrderItem> returnItems)
+        {
+            if (string.IsNullOrWhiteSpace(orderNumber)) throw new ArgumentException(nameof(orderNumber));
+            if (returnItems == null || returnItems.Count == 0) return false;
+
+            // find order
+            var filter = Builders<Order>.Filter.Eq(o => o.OrderNumber, orderNumber);
+            var order = await _col.Find(filter).FirstOrDefaultAsync();
+            if (order == null) return false;
+
+            // Build a lookup for fast matching by ProductObjectId
+            var returnLookup = returnItems
+                .Where(r => r?.ProductObjectId != null)
+                .ToDictionary(r => r.ProductObjectId, r => r);
+
+            var changed = false;
+
+            foreach (var item in order.Items)
+            {
+                if (item?.ProductObjectId == null) continue;
+
+                if (returnLookup.TryGetValue(item.ProductObjectId, out var retItem))
+                {
+                    // mark returned and copy reason
+                    item.IsReturned = true;
+                    item.ReasonForReturn = retItem.ReasonForReturn;
+                    changed = true;
+                }
+            }
+
+            if (!changed) return false; // nothing to update
+
+            // Persist the modified order back to MongoDB
+            var replaceResult = await _col.ReplaceOneAsync(filter, order);
+
+            return replaceResult.IsAcknowledged && replaceResult.ModifiedCount > 0;
+        }
+
     }
 }

@@ -81,6 +81,8 @@ namespace ShoppingPlatform.Controllers
                 returnItems.Add(ri);
             }
 
+            var updateOrder = _orderRepo.updateOrderForReturn(dto.OrderNumber, returnItems);
+
             var ret = new ReturnOrder
             {
                 ReturnOrderNumber = GenerateReturnOrderNumber(),
