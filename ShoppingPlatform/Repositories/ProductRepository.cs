@@ -198,92 +198,73 @@ namespace ShoppingPlatform.Repositories
             // Fabric
             if (fabric != null && fabric.Any())
             {
-                var fabricList = fabric.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => f.Trim()).ToList();
-
-                if (fabricList.Count > 0)
-                {
-                    var orFilters = new List<FilterDefinition<Product>>();
-
-                    foreach (var f in fabricList)
+                var orFilters = fabric
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c =>
                     {
-                        var escaped = Regex.Escape(f);
-                        var pattern = $"^{escaped}$";
+                        var pat = $"^{Regex.Escape(c.Trim())}$"; // anchors for exact token match
+                        var regexDoc = new BsonDocument { { "$regex", pat }, { "$options", "i" } };
 
-                        var elemMatchFilter =
-                            Builders<Product>.Filter.ElemMatch(
-                                p => p.FabricType,
-                                new BsonDocument
-                                {
-                        { "$regex", pattern },
-                        { "$options", "i" }
-                                });
+                        return (FilterDefinition<Product>)Builders<Product>.Filter.ElemMatch(
+                            p => p.FabricType,
+                            regexDoc
+                        );
+                    })
+                    .ToList();
 
-                        orFilters.Add(elemMatchFilter);
-                    }
-
-                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
-                }
+                if (orFilters.Count == 1)
+                    filters.Add(orFilters[0]);
+                else
+                    filters.Add(Builders<Product>.Filter.Or(orFilters));
             }
 
-            // Colors
             if (color != null && color.Any())
             {
-                var colorList = color.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToList();
-
-                if (colorList.Count > 0)
-                {
-                    var orFilters = new List<FilterDefinition<Product>>();
-
-                    foreach (var c in colorList)
+                var orFilters = color
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c =>
                     {
-                        var escaped = Regex.Escape(c);
-                        var pattern = $"^{escaped}$"; // exact match, remove ^$ for partial match
+                        var pat = $"^{Regex.Escape(c.Trim())}$"; // anchors for exact token match
+                        var regexDoc = new BsonDocument { { "$regex", pat }, { "$options", "i" } };
 
-                        var elemMatchFilter =
-                            Builders<Product>.Filter.ElemMatch(
-                                p => p.AvailableColors,
-                                new BsonDocument
-                                {
-                        { "$regex", pattern },
-                        { "$options", "i" }
-                                });
+                        return (FilterDefinition<Product>)Builders<Product>.Filter.ElemMatch(
+                            p => p.AvailableColors,
+                            regexDoc
+                        );
+                    })
+                    .ToList();
 
-                        orFilters.Add(elemMatchFilter);
-                    }
-
-                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
-                }
+                if (orFilters.Count == 1)
+                    filters.Add(orFilters[0]);
+                else
+                    filters.Add(Builders<Product>.Filter.Or(orFilters));
             }
+
+
 
             // Sizes
             if (sizes != null && sizes.Any())
             {
-                var sizeList = sizes.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
-
-                if (sizeList.Count > 0)
-                {
-                    var orFilters = new List<FilterDefinition<Product>>();
-
-                    foreach (var s in sizeList)
+                var orFilters = sizes
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c =>
                     {
-                        var escaped = Regex.Escape(s);
-                        var pattern = $"^{escaped}$";
+                        var pat = $"^{Regex.Escape(c.Trim())}$"; // anchors for exact token match
+                        var regexDoc = new BsonDocument { { "$regex", pat }, { "$options", "i" } };
 
-                        var elemMatchFilter =
-                            Builders<Product>.Filter.ElemMatch(
-                                p => p.SizeOfProduct,
-                                new BsonDocument
-                                {
-                        { "$regex", pattern },
-                        { "$options", "i" }
-                                });
+                        return (FilterDefinition<Product>)Builders<Product>.Filter.ElemMatch(
+                            p => p.SizeOfProduct,
+                            regexDoc
+                        );
+                    })
+                    .ToList();
 
-                        orFilters.Add(elemMatchFilter);
-                    }
-
-                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
-                }
+                if (orFilters.Count == 1)
+                    filters.Add(orFilters[0]);
+                else
+                    filters.Add(Builders<Product>.Filter.Or(orFilters));
             }
+          
 
 
 
