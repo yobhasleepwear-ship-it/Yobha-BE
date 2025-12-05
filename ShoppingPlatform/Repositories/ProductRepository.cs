@@ -203,17 +203,37 @@ namespace ShoppingPlatform.Repositories
             // Color
             if (color != null && color.Any())
             {
-                var regexes = new MongoDB.Bson.BsonArray(
-                    color.Where(c => !string.IsNullOrWhiteSpace(c))
-                         .Select(c => new MongoDB.Bson.BsonRegularExpression(c.Trim(), "i"))
-                );
+                var colorList = color
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c => c.Trim())
+                    .ToList();
 
-                var colorDoc = new MongoDB.Bson.BsonDocument("AvailableColors",
-                    new MongoDB.Bson.BsonDocument("$in", regexes));
+                if (colorList.Count > 0)
+                {
+                    var orArray = new MongoDB.Bson.BsonArray();
+                    foreach (var c in colorList)
+                    {
+                        // { availableColors: { $regex: "<pattern>", $options: "i" } }
+                        var regexDoc = new MongoDB.Bson.BsonDocument
+            {
+                {
+                    "AvailableColors",
+                    new MongoDB.Bson.BsonDocument
+                    {
+                        { "$regex", c },
+                        { "$options", "i" }
+                    }
+                }
+            };
+                        orArray.Add(regexDoc);
+                    }
 
-                filters.Add((FilterDefinition<Product>)colorDoc);
+                    var orDoc = new MongoDB.Bson.BsonDocument("$or", orArray);
+                    filters.Add((FilterDefinition<Product>)orDoc);
+                }
             }
-            // Color
+
+            // sizes
             if (sizes != null && sizes.Any())
             {
                 var regexes = new MongoDB.Bson.BsonArray(
