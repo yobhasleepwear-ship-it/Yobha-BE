@@ -196,8 +196,7 @@ namespace ShoppingPlatform.Repositories
                 filters.Add(builder.Eq(p => p.ProductCategory, subCategory.Trim()));
             }
 
-            // Fabric
-            
+            // ---------- Fabric (defensive) ----------
             if (fabric != null && fabric.Any())
             {
                 var fabricList = fabric
@@ -208,9 +207,7 @@ namespace ShoppingPlatform.Repositories
                 if (fabricList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-
-                    // check both "AvailableColors" and "availableColors"
-                    var fieldNames = new[] { "FabricType", "fabricType" };
+                    var fieldNames = new[] { "FabricType", "fabricType" }; // DB shows FabricType
 
                     foreach (var fname in fieldNames)
                     {
@@ -218,27 +215,19 @@ namespace ShoppingPlatform.Repositories
                         foreach (var c in fabricList)
                         {
                             var escaped = Regex.Escape(c);
-                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring match
+                            var pattern = $"^{escaped}$";
                             var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
                             perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
                         }
 
-                        if (perFieldOr.Count == 1)
-                            orFilters.Add(perFieldOr[0]);
-                        else
-                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
+                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
                     }
 
-                    // If any of the field-name checks match -> include product
-                    if (orFilters.Count == 1)
-                        filters.Add(orFilters[0]);
-                    else
-                        filters.Add(Builders<Product>.Filter.Or(orFilters));
+                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
-            // make sure at top: using System.Text.RegularExpressions;
 
-            // ---------- Colors (defensive: check both PascalCase and camelCase field names) ----------
+            // ---------- Colors (defensive: check both PascalCase and camelCase) ----------
             if (color != null && color.Any())
             {
                 var colorList = color
@@ -249,9 +238,7 @@ namespace ShoppingPlatform.Repositories
                 if (colorList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-
-                    // check both "AvailableColors" and "availableColors"
-                    var fieldNames = new[] { "AvailableColors", "availableColors" };
+                    var fieldNames = new[] { "AvailableColors", "availableColors" }; // DB: AvailableColors
 
                     foreach (var fname in fieldNames)
                     {
@@ -259,26 +246,19 @@ namespace ShoppingPlatform.Repositories
                         foreach (var c in colorList)
                         {
                             var escaped = Regex.Escape(c);
-                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring match
+                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring
                             var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
                             perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
                         }
 
-                        if (perFieldOr.Count == 1)
-                            orFilters.Add(perFieldOr[0]);
-                        else
-                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
+                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
                     }
 
-                    // If any of the field-name checks match -> include product
-                    if (orFilters.Count == 1)
-                        filters.Add(orFilters[0]);
-                    else
-                        filters.Add(Builders<Product>.Filter.Or(orFilters));
+                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
 
-            // ---------- Sizes (defensive: check possible field names) ----------
+            // ---------- Sizes (defensive: check multiple possible names) ----------
             if (sizes != null && sizes.Any())
             {
                 var sizeList = sizes
@@ -289,7 +269,7 @@ namespace ShoppingPlatform.Repositories
                 if (sizeList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-                    var fieldNames = new[] { "SizeOfProduct", "availableSizes", "AvailableSizes" };
+                    var fieldNames = new[] { "SizeOfProduct", "AvailableSizes", "availableSizes" }; // DB: SizeOfProduct present
 
                     foreach (var fname in fieldNames)
                     {
@@ -302,18 +282,13 @@ namespace ShoppingPlatform.Repositories
                             perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
                         }
 
-                        if (perFieldOr.Count == 1)
-                            orFilters.Add(perFieldOr[0]);
-                        else
-                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
+                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
                     }
 
-                    if (orFilters.Count == 1)
-                        filters.Add(orFilters[0]);
-                    else
-                        filters.Add(Builders<Product>.Filter.Or(orFilters));
+                    filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
+
 
 
             var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
