@@ -119,7 +119,7 @@ namespace ShoppingPlatform.Repositories
             List<string>? color
         )
         {
-            // Guard and basic vars
+            // Guard
             page = Math.Max(1, page);
             pageSize = Math.Clamp(pageSize, 1, 200);
             var skip = (page - 1) * pageSize;
@@ -127,263 +127,211 @@ namespace ShoppingPlatform.Repositories
             var usePriceSort = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase)
                             || sortDef.Equals("price_desc", StringComparison.OrdinalIgnoreCase);
 
-            var swTotalStart = Stopwatch.StartNew();
+            var builder = Builders<Product>.Filter;
+            var filters = new List<FilterDefinition<Product>>();
+
+            // Base filters
+            filters.Add(builder.Eq(p => p.IsActive, true));
+            filters.Add(builder.Eq(p => p.IsDeleted, false));
+
+            // Text search
+            if (!string.IsNullOrWhiteSpace(q))
+            {
+                var qLower = q.Trim();
+                filters.Add(builder.Or(
+                    builder.Regex(p => p.Name, new MongoDB.Bson.BsonRegularExpression(qLower, "i")),
+                    builder.Regex(p => p.Description, new MongoDB.Bson.BsonRegularExpression(qLower, "i")),
+                    builder.Regex(p => p.Slug, new MongoDB.Bson.BsonRegularExpression(qLower, "i"))
+                ));
+            }
+
+            // Category / subcategory
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                var cat = category.Trim();
+                filters.Add(builder.Or(
+                    builder.Eq(p => p.ProductCategory, cat),
+                    builder.Eq(p => p.ProductSubCategory, cat),
+                    builder.Eq(p => p.ProductMainCategory, cat)
+                ));
+            }
+            if (!string.IsNullOrWhiteSpace(subCategory))
+            {
+                var subCat = subCategory.Trim();
+                filters.Add(builder.Eq(p => p.ProductCategory, subCat));
+            }
+
+            // Fabric
+            if (fabric != null && fabric.Any())
+                filters.Add(builder.AnyIn(p => p.FabricType, fabric));
+
+            // Color - case-insensitive match against DB field 'availableColors'
+            if (color != null && color.Any())
+            {
+                var regexes = new MongoDB.Bson.BsonArray(color
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c => new MongoDB.Bson.BsonRegularExpression(c!.Trim(), "i")));
+
+                var colorFilterDoc = new MongoDB.Bson.BsonDocument("availableColors", new MongoDB.Bson.BsonDocument("$in", regexes));
+                filters.Add((FilterDefinition<Product>)colorFilterDoc);
+            }
+
+            // Non-price combined filter
+            var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
+
+            // For non-aggregation find path: build priceElemMatch if client passed min/max/country (keeps prior behavior)
+            FilterDefinition<Price>? priceElemMatch = null;
+            if (minPrice.HasValue || maxPrice.HasValue || !string.IsNullOrWhiteSpace(country))
+            {
+                var priceInner = new List<FilterDefinition<Price>>();
+                if (!string.IsNullOrWhiteSpace(country))
+                    priceInner.Add(Builders<Price>.Filter.Eq(p => p.Country, country));
+                if (minPrice.HasValue)
+                    priceInner.Add(Builders<Price>.Filter.Gte(p => p.PriceAmount, minPrice.Value));
+                if (maxPrice.HasValue)
+                    priceInner.Add(Builders<Price>.Filter.Lte(p => p.PriceAmount, maxPrice.Value));
+                if (priceInner.Count > 0) priceElemMatch = Builders<Price>.Filter.And(priceInner);
+            }
+
             try
             {
-                var builder = Builders<Product>.Filter;
-                var filters = new List<FilterDefinition<Product>>();
-
-                // Base filters
-                filters.Add(builder.Eq(p => p.IsActive, true));
-                filters.Add(builder.Eq(p => p.IsDeleted, false));
-
-                // Text search
-                if (!string.IsNullOrWhiteSpace(q))
-                {
-                    var qLower = q.Trim();
-                    filters.Add(builder.Or(
-                        builder.Regex(p => p.Name, new BsonRegularExpression(qLower, "i")),
-                        builder.Regex(p => p.Description, new BsonRegularExpression(qLower, "i")),
-                        builder.Regex(p => p.Slug, new BsonRegularExpression(qLower, "i"))
-                    ));
-                }
-
-                // Category / subcategory
-                if (!string.IsNullOrWhiteSpace(category))
-                {
-                    var cat = category.Trim();
-                    filters.Add(builder.Or(
-                        builder.Eq(p => p.ProductCategory, cat),
-                        builder.Eq(p => p.ProductSubCategory, cat),
-                        builder.Eq(p => p.ProductMainCategory, cat)
-                    ));
-                }
-                if (!string.IsNullOrWhiteSpace(subCategory))
-                {
-                    var subCat = subCategory.Trim();
-                    filters.Add(builder.Eq(p => p.ProductCategory, subCat));
-                }
-
-                // Fabric
-                if (fabric != null && fabric.Any())
-                    filters.Add(builder.AnyIn(p => p.FabricType, fabric));
-
-                // Colour - case-insensitive match on DB field 'availableColors'
-                if (color != null && color.Any())
-                {
-                    var regexes = new BsonArray(color
-                        .Where(c => !string.IsNullOrWhiteSpace(c))
-                        .Select(c => new BsonRegularExpression(c!.Trim(), "i")));
-
-                    var colorFilterDoc = new BsonDocument("availableColors", new BsonDocument("$in", regexes));
-                    // cast BsonDocument to FilterDefinition<Product>
-                    filters.Add((FilterDefinition<Product>)colorFilterDoc);
-                }
-
-                // priceElemMatch for non-aggregation find path (we won't add this to nonPriceCombined)
-                FilterDefinition<Price>? priceElemMatch = null;
-                if (minPrice.HasValue || maxPrice.HasValue || !string.IsNullOrWhiteSpace(country))
-                {
-                    var priceInner = new List<FilterDefinition<Price>>();
-                    if (!string.IsNullOrWhiteSpace(country))
-                        priceInner.Add(Builders<Price>.Filter.Eq(p => p.Country, country));
-                    if (minPrice.HasValue)
-                        priceInner.Add(Builders<Price>.Filter.Gte(p => p.PriceAmount, minPrice.Value));
-                    if (maxPrice.HasValue)
-                        priceInner.Add(Builders<Price>.Filter.Lte(p => p.PriceAmount, maxPrice.Value));
-                    if (priceInner.Count > 0) priceElemMatch = Builders<Price>.Filter.And(priceInner);
-                }
-
-                var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
-
-                _logger.LogInformation("QueryAsync called. priceSort={priceSort} country={country} minPrice={minPrice} maxPrice={maxPrice} page={page} pageSize={pageSize}",
-                    usePriceSort, country, minPrice, maxPrice, page, pageSize);
-
                 if (usePriceSort)
                 {
-                    // ===== In-memory price-sort fallback =====
-                    int fetchMultiplier = 4;
-                    int fetchLimit = Math.Clamp(pageSize * fetchMultiplier, pageSize, 2000);
-
-                    _logger.LogInformation("Using in-memory price-sort fallback. Fetching up to {limit} candidates", fetchLimit);
-
-                    var candidates = await _collection.Find(nonPriceCombined)
-                                                     .Limit(fetchLimit)
-                                                     .ToListAsync();
-
-                    _logger.LogInformation("Fetched {count} candidate products for in-memory sorting", candidates.Count);
-
-                    var computed = new List<(Product product, double? effectivePrice, string? debug)>();
-                    foreach (var p in candidates)
+                    if (string.IsNullOrWhiteSpace(country))
                     {
-                        double? eff = null;
-                        string? debugMsg = null;
-                        try
-                        {
-                            var priceList = p.PriceList ?? new List<Price>();
-
-                            var matched = string.IsNullOrWhiteSpace(country)
-                                ? priceList
-                                : priceList.Where(x => !string.IsNullOrWhiteSpace(x?.Country) && x.Country.Equals(country, StringComparison.OrdinalIgnoreCase)).ToList();
-
-                            if (matched != null && matched.Count > 0)
-                            {
-                                double? minVal = null;
-                                foreach (var pl in matched)
-                                {
-                                    if (pl == null) continue;
-                                    try
-                                    {
-                                        object raw = pl.PriceAmount!;
-                                        double dv;
-
-                                        if (raw is decimal dec) dv = Convert.ToDouble(dec);
-                                        else if (raw is double d) dv = d;
-                                        else if (raw is float f) dv = Convert.ToDouble(f);
-                                        else if (raw is long l) dv = Convert.ToDouble(l);
-                                        else if (raw is int iv) dv = Convert.ToDouble(iv);
-                                        else if (raw is MongoDB.Bson.Decimal128 d128)
-                                        {
-                                            // Correct static call
-                                            var asDecimal = MongoDB.Bson.Decimal128.ToDecimal(d128);
-                                            dv = Convert.ToDouble(asDecimal);
-                                        }
-                                        else
-                                        {
-                                            // Last resort - try Convert.ToDouble (may throw)
-                                            dv = Convert.ToDouble(raw);
-                                        }
-
-                                        if (!double.IsNaN(dv) && !double.IsInfinity(dv))
-                                        {
-                                            minVal = !minVal.HasValue ? dv : Math.Min(minVal.Value, dv);
-                                        }
-                                    }
-                                    catch (Exception exConv)
-                                    {
-                                        debugMsg = $"PriceAmount conversion error for product {p.Id} priceListId={pl?.Id}: {exConv.Message}";
-                                        _logger.LogWarning(debugMsg);
-                                    }
-                                }
-
-                                eff = minVal;
-                            }
-
-                            if (!eff.HasValue)
-                            {
-                                try
-                                {
-                                    if (p.Price != null)
-                                    {
-                                        object rawTop = p.Price!;
-                                        double dv;
-                                        if (rawTop is decimal decT) dv = Convert.ToDouble(decT);
-                                        else if (rawTop is double dd) dv = dd;
-                                        else if (rawTop is MongoDB.Bson.Decimal128 d128Top)
-                                        {
-                                            var asDecimalTop = MongoDB.Bson.Decimal128.ToDecimal(d128Top);
-                                            dv = Convert.ToDouble(asDecimalTop);
-                                        }
-                                        else dv = Convert.ToDouble(rawTop);
-
-                                        eff = dv;
-                                    }
-                                }
-                                catch (Exception exTop)
-                                {
-                                    debugMsg = (debugMsg != null ? debugMsg + " | " : "") + $"Top-level Price conversion error for product {p.Id}: {exTop.Message}";
-                                    _logger.LogWarning(debugMsg);
-                                }
-                            }
-                        }
-                        catch (Exception outerEx)
-                        {
-                            debugMsg = $"Unexpected error computing effectivePrice for product {p.Id}: {outerEx.Message}";
-                            _logger.LogError(outerEx, debugMsg);
-                        }
-
-                        computed.Add((p, eff, debugMsg));
+                        // if country is required for this behavior, but not provided, we can't pick first-country price.
+                        // Either fail or revert to previous behavior. Here we'll treat missing country as "no results".
+                        return (new List<ProductListItemDto>(), 0);
                     }
 
-                    _logger.LogInformation("Sample effectivePrice values: {samples}",
-                        string.Join(", ", computed.Take(10).Select(x => $"{x.product.Id}:{(x.effectivePrice.HasValue ? x.effectivePrice.Value.ToString("0.00") : "null")}")));
+                    // ---------------- Aggregation pipeline: first-match per country and exclude docs without matched PriceList ----------------
+                    // 1) match non-price filters
+                    var matchStage = new MongoDB.Bson.BsonDocument("$match", nonPriceCombined.ToBsonDocument());
 
-                    var filteredComputed = computed.Where(c =>
+                    // 2) matchedPrices = $filter( PriceList, pl -> pl.Country == country )
+                    var matchedPricesExpr = new MongoDB.Bson.BsonDocument("$filter", new MongoDB.Bson.BsonDocument
+            {
+                { "input", new MongoDB.Bson.BsonDocument("$ifNull", new MongoDB.Bson.BsonArray { "$PriceList", new MongoDB.Bson.BsonArray() }) },
+                { "as", "pl" },
+                { "cond", new MongoDB.Bson.BsonDocument("$eq", new MongoDB.Bson.BsonArray { "$$pl.Country", country }) }
+            });
+
+                    var addMatchedArrayStage = new MongoDB.Bson.BsonDocument("$addFields", new MongoDB.Bson.BsonDocument("matchedPrices", matchedPricesExpr));
+
+                    // 3) Exclude products where matchedPrices is empty -> require size(matchedPrices) > 0
+                    var requireMatchedStage = new MongoDB.Bson.BsonDocument("$match", new MongoDB.Bson.BsonDocument("$expr",
+                        new MongoDB.Bson.BsonDocument("$gt", new MongoDB.Bson.BsonArray { new MongoDB.Bson.BsonDocument("$size", "$matchedPrices"), 0 })));
+
+                    // 4) map matchedPrices to numeric (safe convert) and pick first element
+                    var mappedFirstPriceExpr = new MongoDB.Bson.BsonDocument("$arrayElemAt", new MongoDB.Bson.BsonArray
+            {
+                new MongoDB.Bson.BsonDocument("$map", new MongoDB.Bson.BsonDocument
+                {
+                    { "input", "$matchedPrices" },
+                    { "as", "mp" },
+                    { "in", new MongoDB.Bson.BsonDocument("$convert", new MongoDB.Bson.BsonDocument
+                        {
+                            { "input", "$$mp.PriceAmount" },
+                            { "to", "double" },
+                            { "onError", MongoDB.Bson.BsonNull.Value },
+                            { "onNull", MongoDB.Bson.BsonNull.Value }
+                        })
+                    }
+                }),
+                0
+            });
+
+                    // 5) set firstMatchedPrice and effectivePrice (we use firstMatchedPrice for sort/filter)
+                    var addFirstPriceStage = new MongoDB.Bson.BsonDocument("$addFields", new MongoDB.Bson.BsonDocument
+            {
+                { "firstMatchedPrice", mappedFirstPriceExpr },
+                { "effectivePrice", mappedFirstPriceExpr } // alias for clarity
+            });
+
+                    // 6) apply min/max on firstMatchedPrice if provided (via $expr)
+                    MongoDB.Bson.BsonDocument priceFilterMatchStage = null;
+                    var priceExprFilters = new List<MongoDB.Bson.BsonDocument>();
+                    if (minPrice.HasValue)
+                        priceExprFilters.Add(new MongoDB.Bson.BsonDocument("$gte", new MongoDB.Bson.BsonArray { "$firstMatchedPrice", Convert.ToDouble(minPrice.Value) }));
+                    if (maxPrice.HasValue)
+                        priceExprFilters.Add(new MongoDB.Bson.BsonDocument("$lte", new MongoDB.Bson.BsonArray { "$firstMatchedPrice", Convert.ToDouble(maxPrice.Value) }));
+                    if (priceExprFilters.Count > 0)
                     {
-                        if (!c.effectivePrice.HasValue) return false;
-                        if (minPrice.HasValue && c.effectivePrice.Value < Convert.ToDouble(minPrice.Value)) return false;
-                        if (maxPrice.HasValue && c.effectivePrice.Value > Convert.ToDouble(maxPrice.Value)) return false;
-                        return true;
-                    }).ToList();
+                        priceFilterMatchStage = new MongoDB.Bson.BsonDocument("$match", new MongoDB.Bson.BsonDocument("$expr", new MongoDB.Bson.BsonDocument("$and", new MongoDB.Bson.BsonArray(priceExprFilters))));
+                    }
 
-                    if (sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase))
-                        filteredComputed = filteredComputed.OrderBy(c => c.effectivePrice ?? double.MaxValue).ToList();
-                    else
-                        filteredComputed = filteredComputed.OrderByDescending(c => c.effectivePrice ?? double.MinValue).ToList();
+                    // 7) Sorting: deterministic; since we excluded docs without a matched price, effectivePrice should be numeric.
+                    var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
+                    var sortStage = new MongoDB.Bson.BsonDocument("$sort", new MongoDB.Bson.BsonDocument { { "firstMatchedPrice", sortDirection }, { "CreatedAt", -1 } });
 
-                    var totalNonPrice = await _collection.CountDocumentsAsync(nonPriceCombined);
-                    var totalFilteredInCandidates = filteredComputed.Count;
-                    _logger.LogInformation("totalNonPrice={totalNonPrice}, totalFilteredInCandidates={totalFilteredInCandidates}", totalNonPrice, totalFilteredInCandidates);
+                    // 8) build pipeline
+                    var pipeline = new List<MongoDB.Bson.BsonDocument>
+            {
+                matchStage,
+                addMatchedArrayStage,
+                requireMatchedStage,
+                addFirstPriceStage
+            };
+                    if (priceFilterMatchStage != null) pipeline.Add(priceFilterMatchStage);
+                    pipeline.Add(sortStage);
 
-                    var pageItems = filteredComputed.Skip(skip).Take(pageSize).Select(x => x.product).ToList();
-                    var mapped = pageItems.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                    // Count pipeline (same as pipeline but with $count)
+                    var countPipeline = new List<MongoDB.Bson.BsonDocument>(pipeline) { new MongoDB.Bson.BsonDocument("$count", "count") };
 
-                    return (mapped, totalFilteredInCandidates);
+                    // Execute count
+                    var countAgg = _collection.Aggregate().AppendStage<MongoDB.Bson.BsonDocument>(countPipeline[0]);
+                    for (int i = 1; i < countPipeline.Count; i++) countAgg = countAgg.AppendStage<MongoDB.Bson.BsonDocument>(countPipeline[i]);
+                    var countResult = await countAgg.ToListAsync();
+                    long total = 0;
+                    if (countResult != null && countResult.Count > 0) total = countResult[0].GetValue("count").ToInt64();
+
+                    // add pagination
+                    pipeline.Add(new MongoDB.Bson.BsonDocument("$skip", skip));
+                    pipeline.Add(new MongoDB.Bson.BsonDocument("$limit", pageSize));
+
+                    // run aggregation
+                    var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
+                    for (int i = 1; i < pipeline.Count; i++) agg = agg.AppendStage<Product>(pipeline[i]);
+
+                    var productsCursor = await agg.ToListAsync();
+                    var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                    return (mapped, total);
                 }
                 else
                 {
-                    // Non-price path: build combined filter with priceElemMatch if present
+                    // Non-price path: keep prior behavior (apply priceElemMatch if present)
                     var combinedForFindList = new List<FilterDefinition<Product>>(filters);
                     if (priceElemMatch != null) combinedForFindList.Add(builder.ElemMatch(p => p.PriceList, priceElemMatch));
                     var combinedFilterFinal = combinedForFindList.Count > 0 ? builder.And(combinedForFindList) : builder.Empty;
 
-                    _logger.LogInformation("Executing Find with filter: {filter}", combinedFilterFinal.ToBsonDocument().ToJson());
+                    var total = await _collection.CountDocumentsAsync(combinedFilterFinal);
 
-                    try
+                    var sortDefBuilder = Builders<Product>.Sort;
+                    SortDefinition<Product> sortDefFinal = sort switch
                     {
-                        var swFind = Stopwatch.StartNew();
-                        var total = await _collection.CountDocumentsAsync(combinedFilterFinal);
-                        swFind.Stop();
-                        _logger.LogInformation("CountDocumentsAsync completed in {ms}ms, total={total}", swFind.ElapsedMilliseconds, total);
+                        "popular" => sortDefBuilder.Descending(p => p.SalesCount),
+                        "price_asc" => sortDefBuilder.Ascending(p => p.Price),
+                        "price_desc" => sortDefBuilder.Descending(p => p.Price),
+                        _ => sortDefBuilder.Descending(p => p.CreatedAt)
+                    };
 
-                        var sortDefBuilder = Builders<Product>.Sort;
-                        SortDefinition<Product> sortDefFinal = sort switch
-                        {
-                            "popular" => sortDefBuilder.Descending(p => p.SalesCount),
-                            "price_asc" => sortDefBuilder.Ascending(p => p.Price),
-                            "price_desc" => sortDefBuilder.Descending(p => p.Price),
-                            _ => sortDefBuilder.Descending(p => p.CreatedAt)
-                        };
+                    var productsCursor = await _collection.Find(combinedFilterFinal)
+                        .Sort(sortDefFinal)
+                        .Skip(skip)
+                        .Limit(pageSize)
+                        .ToListAsync();
 
-                        var swFindMain = Stopwatch.StartNew();
-                        var productsCursor = await _collection.Find(combinedFilterFinal)
-                            .Sort(sortDefFinal)
-                            .Skip(skip)
-                            .Limit(pageSize)
-                            .ToListAsync();
-                        swFindMain.Stop();
-
-                        _logger.LogInformation("Find completed in {ms}ms, returned {count} products", swFindMain.ElapsedMilliseconds, productsCursor.Count);
-
-                        var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
-                        swTotalStart.Stop();
-                        _logger.LogInformation("QueryAsync total time: {ms}ms", swTotalStart.ElapsedMilliseconds);
-                        return (mapped, total);
-                    }
-                    catch (Exception findEx)
-                    {
-                        _logger.LogError(findEx, "Find path failed. Filter: {filter}", combinedForFindList.Count > 0 ? builder.And(combinedForFindList).ToBsonDocument().ToJson() : "{}");
-                        throw;
-                    }
+                    var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                    return (mapped, total);
                 }
             }
             catch (Exception ex)
             {
-                swTotalStart.Stop();
-                _logger.LogError(ex, "QueryAsync top-level error after {ms}ms", swTotalStart.ElapsedMilliseconds);
+                _logger?.LogError(ex, "QueryAsync failed");
                 throw;
             }
         }
+
 
 
 
