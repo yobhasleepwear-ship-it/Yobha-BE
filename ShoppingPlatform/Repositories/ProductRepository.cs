@@ -196,98 +196,73 @@ namespace ShoppingPlatform.Repositories
                 filters.Add(builder.Eq(p => p.ProductCategory, subCategory.Trim()));
             }
 
-            // ---------- Fabric (defensive) ----------
+            // Fabric — typed ElemMatch on FabricType
             if (fabric != null && fabric.Any())
             {
-                var fabricList = fabric
-                    .Where(c => !string.IsNullOrWhiteSpace(c))
-                    .Select(c => c.Trim())
-                    .ToList();
-
+                var fabricList = fabric.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToList();
                 if (fabricList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-                    var fieldNames = new[] { "FabricType", "fabricType" }; // DB shows FabricType
-
-                    foreach (var fname in fieldNames)
+                    foreach (var f in fabricList)
                     {
-                        var perFieldOr = new List<FilterDefinition<Product>>();
-                        foreach (var c in fabricList)
-                        {
-                            var escaped = Regex.Escape(c);
-                            var pattern = $"^{escaped}$";
-                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
-                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
-                        }
-
-                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
+                        var escaped = Regex.Escape(f);
+                        var pattern = $"^{escaped}$";
+                        var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
+                        orFilters.Add(Builders<Product>.Filter.ElemMatch(p => p.FabricType, Builders<string>.Filter.Regex(regex)));
                     }
-
                     filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
-
-            // ---------- Colors (defensive: check both PascalCase and camelCase) ----------
+            // Colors — typed ElemMatch (works for array of strings)
             if (color != null && color.Any())
             {
-                var colorList = color
-                    .Where(c => !string.IsNullOrWhiteSpace(c))
-                    .Select(c => c.Trim())
-                    .ToList();
-
+                var colorList = color.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim()).ToList();
                 if (colorList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-                    var fieldNames = new[] { "AvailableColors", "availableColors" }; // DB: AvailableColors
 
-                    foreach (var fname in fieldNames)
+                    // Try typed property first (if your Product class has AvailableColors or availableColors property)
+                    // This will succeed even if BsonElement maps differently because we use the expression.
+                    foreach (var c in colorList)
                     {
-                        var perFieldOr = new List<FilterDefinition<Product>>();
-                        foreach (var c in colorList)
-                        {
-                            var escaped = Regex.Escape(c);
-                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring
-                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
-                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
-                        }
+                        var escaped = Regex.Escape(c);
+                        var pattern = $"^{escaped}$"; // exact token; remove anchors for substring
+                        var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
 
-                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
+                        // ElemMatch over array-of-strings with a string regex filter
+                        var typedElem = Builders<Product>.Filter.ElemMatch(p => p.AvailableColors, Builders<string>.Filter.Regex(regex));
+                        orFilters.Add(typedElem);
                     }
 
                     filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
 
-            // ---------- Sizes (defensive: check multiple possible names) ----------
+            // Sizes — typed ElemMatch; checks possible product properties if your model uses SizeOfProduct or AvailableSizes
             if (sizes != null && sizes.Any())
             {
-                var sizeList = sizes
-                    .Where(s => !string.IsNullOrWhiteSpace(s))
-                    .Select(s => s.Trim())
-                    .ToList();
-
+                var sizeList = sizes.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
                 if (sizeList.Count > 0)
                 {
                     var orFilters = new List<FilterDefinition<Product>>();
-                    var fieldNames = new[] { "SizeOfProduct", "AvailableSizes", "availableSizes" }; // DB: SizeOfProduct present
 
-                    foreach (var fname in fieldNames)
+                    foreach (var s in sizeList)
                     {
-                        var perFieldOr = new List<FilterDefinition<Product>>();
-                        foreach (var s in sizeList)
-                        {
-                            var escaped = Regex.Escape(s);
-                            var pattern = $"^{escaped}$";
-                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
-                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
-                        }
+                        var escaped = Regex.Escape(s);
+                        var pattern = $"^{escaped}$";
+                        var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
 
-                        orFilters.Add(perFieldOr.Count == 1 ? perFieldOr[0] : Builders<Product>.Filter.Or(perFieldOr));
+                        // Try primary property used in DB (SizeOfProduct)
+                        orFilters.Add(Builders<Product>.Filter.ElemMatch(p => p.SizeOfProduct, Builders<string>.Filter.Regex(regex)));
+
+                        // If your class also exposes AvailableSizes, add that too (avoid duplicate if same backing field)
+                        // orFilters.Add(Builders<Product>.Filter.ElemMatch(p => p.AvailableSizes, Builders<string>.Filter.Regex(regex)));
                     }
 
                     filters.Add(orFilters.Count == 1 ? orFilters[0] : Builders<Product>.Filter.Or(orFilters));
                 }
             }
+
 
 
 
