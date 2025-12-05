@@ -382,7 +382,7 @@ namespace ShoppingPlatform.Repositories
                     if (req.LoyaltyDiscountAmount != null && req.LoyaltyDiscountAmount > 0)
                     {
                         var pts = await _userRepository.TryDeductLoyaltyPointsAsync(order.UserId, (req.LoyaltyDiscountAmount ?? 0m));
-                        var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(order.UserId, "Debit", req.LoyaltyDiscountAmount ?? 0m, "Referral", null, order.Email, null, pts);
+                        var updateloyalty = _loyaltyPointAuditService.RecordSimpleAsync(order.UserId, "Debit", req.LoyaltyDiscountAmount ?? 0m, "Order Created", null, order.Email, null, pts);
 
                     }
 
