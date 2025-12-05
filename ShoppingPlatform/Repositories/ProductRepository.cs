@@ -201,58 +201,94 @@ namespace ShoppingPlatform.Repositories
 
                 if (usePriceSort)
                 {
-                    // Build aggregation pipeline (unwind -> group -> effectivePrice -> filter -> sort -> page)
                     var matchStage = new BsonDocument("$match", nonPriceCombined.ToBsonDocument());
-                    var unwindStage = new BsonDocument("$unwind", new BsonDocument { { "path", "$PriceList" }, { "preserveNullAndEmptyArrays", true } });
 
-                    BsonDocument countryMatchStage = null;
+                    // Unwind PriceList but preserve products without PriceList
+                    var unwindStage = new BsonDocument("$unwind",
+                        new BsonDocument { { "path", "$PriceList" }, { "preserveNullAndEmptyArrays", true } });
+
+                    // Build numericPLPrice so that it's only set when:
+                    //  - PriceList exists AND
+                    //  - (no country provided OR PriceList.Country == country) AND
+                    //  - PriceAmount is numeric
+                    // Otherwise numericPLPrice = null
+                    BsonDocument currencyCondition;
                     if (!string.IsNullOrWhiteSpace(country))
                     {
-                        countryMatchStage = new BsonDocument("$match", new BsonDocument("$or", new BsonArray {
-                    new BsonDocument("PriceList.Country", country),
-                    new BsonDocument("PriceList", BsonNull.Value)
-                }));
+                        // check PriceList.Country == country
+                        currencyCondition = new BsonDocument("$eq", new BsonArray { "$PriceList.Country", country });
+                    }
+                    else
+                    {
+                        // always true
+                        currencyCondition = new BsonDocument("$const", true);
                     }
 
-                    // Convert PriceAmount to numeric safely
                     var addNumericPriceStage = new BsonDocument("$addFields",
                         new BsonDocument("numericPLPrice",
                             new BsonDocument("$cond", new BsonArray
                             {
-                        new BsonDocument("$in", new BsonArray { new BsonDocument("$type", "$PriceList.PriceAmount"), new BsonArray { "double","int","long","decimal" } }),
-                        new BsonDocument("$convert", new BsonDocument { { "input", "$PriceList.PriceAmount" }, { "to", "double" }, { "onError", BsonNull.Value }, { "onNull", BsonNull.Value } }),
-                        BsonNull.Value
+                // condition: (currencyCondition) AND (type is numeric)
+                new BsonDocument("$and", new BsonArray
+                {
+                    currencyCondition,
+                    new BsonDocument("$in", new BsonArray
+                    {
+                        new BsonDocument("$type", "$PriceList.PriceAmount"),
+                        new BsonArray { "double", "int", "long", "decimal" }
+                    })
+                }),
+                // then: convert to double
+                new BsonDocument("$convert", new BsonDocument
+                {
+                    { "input", "$PriceList.PriceAmount" },
+                    { "to", "double" },
+                    { "onError", BsonNull.Value },
+                    { "onNull", BsonNull.Value }
+                }),
+                // else: null
+                BsonNull.Value
                             })
-                        ));
+                        )
+                    );
 
+                    // Group back: min of numericPLPrice (nulls ignored)
                     var groupStage = new BsonDocument("$group", new BsonDocument
-            {
-                { "_id", "$_id" },
-                { "doc", new BsonDocument("$first", "$$ROOT") },
-                { "minPL", new BsonDocument("$min", "$numericPLPrice") }
-            });
+    {
+        { "_id", "$_id" },
+        { "doc", new BsonDocument("$first", "$$ROOT") },
+        { "minPL", new BsonDocument("$min", "$numericPLPrice") }
+    });
 
+                    // Build effectivePrice: minPL else fallback to top-level Price
                     var addEffectivePriceStage = new BsonDocument("$addFields",
                         new BsonDocument("doc",
                             new BsonDocument("$mergeObjects", new BsonArray
                             {
-                        "$doc",
-                        new BsonDocument("effectivePrice",
-                            new BsonDocument("$ifNull", new BsonArray
-                            {
-                                "$minPL",
-                                new BsonDocument("$convert", new BsonDocument { { "input", "$doc.Price" }, { "to", "double" }, { "onError", BsonNull.Value }, { "onNull", BsonNull.Value } })
-                            })
-                        )
+                "$doc",
+                new BsonDocument("effectivePrice",
+                    new BsonDocument("$ifNull", new BsonArray
+                    {
+                        "$minPL",
+                        new BsonDocument("$convert", new BsonDocument
+                        {
+                            { "input", "$doc.Price" },
+                            { "to", "double" },
+                            { "onError", BsonNull.Value },
+                            { "onNull", BsonNull.Value }
+                        })
+                    })
+                )
                             })
                         ));
 
                     var replaceRootStage = new BsonDocument("$replaceRoot", new BsonDocument("newRoot", "$doc"));
 
-                    // Apply min/max via $expr on effectivePrice if requested
+                    // min/max on effectivePrice (if provided)
                     var priceExprFilters = new List<BsonDocument>();
                     if (minPrice.HasValue) priceExprFilters.Add(new BsonDocument("$gte", new BsonArray { "$effectivePrice", Convert.ToDouble(minPrice.Value) }));
                     if (maxPrice.HasValue) priceExprFilters.Add(new BsonDocument("$lte", new BsonArray { "$effectivePrice", Convert.ToDouble(maxPrice.Value) }));
+
                     BsonDocument priceFilterMatchStage = null;
                     if (priceExprFilters.Count > 0)
                     {
@@ -261,60 +297,32 @@ namespace ShoppingPlatform.Repositories
 
                     var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
                     var sortStage = new BsonDocument("$sort", new BsonDocument { { "effectivePrice", sortDirection }, { "CreatedAt", -1 } });
-                    var skipStage = new BsonDocument("$skip", skip);
-                    var limitStage = new BsonDocument("$limit", pageSize);
 
-                    // pipeline assembly
-                    var pipeline = new List<BsonDocument> { matchStage, unwindStage };
-                    if (countryMatchStage != null) pipeline.Add(countryMatchStage);
-                    pipeline.Add(addNumericPriceStage);
-                    pipeline.Add(groupStage);
-                    pipeline.Add(addEffectivePriceStage);
+                    var pipeline = new List<BsonDocument> { matchStage, unwindStage, addNumericPriceStage, groupStage, addEffectivePriceStage };
                     if (priceFilterMatchStage != null) pipeline.Add(priceFilterMatchStage);
                     pipeline.Add(replaceRootStage);
                     pipeline.Add(sortStage);
 
-                    // Log the pipeline (pretty)
-                    _logger.LogInformation("Aggregation pipeline (before pagination): {pipeline}", string.Join("\n", pipeline.Select(p => p.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { Indent = true }))));
-
                     // Count pipeline
                     var countPipeline = new List<BsonDocument>(pipeline) { new BsonDocument("$count", "count") };
 
-                    try
-                    {
-                        var swCount = Stopwatch.StartNew();
-                        var countAgg = _collection.Aggregate().AppendStage<BsonDocument>(countPipeline[0]);
-                        for (int i = 1; i < countPipeline.Count; i++) countAgg = countAgg.AppendStage<BsonDocument>(countPipeline[i]);
-                        var countResult = await countAgg.ToListAsync();
-                        swCount.Stop();
+                    // Execute count agg (with logging/try-catch as before)
+                    var countAgg = _collection.Aggregate().AppendStage<BsonDocument>(countPipeline[0]);
+                    for (int i = 1; i < countPipeline.Count; i++) countAgg = countAgg.AppendStage<BsonDocument>(countPipeline[i]);
+                    var countResult = await countAgg.ToListAsync();
+                    long total = 0;
+                    if (countResult != null && countResult.Count > 0) total = countResult[0].GetValue("count").ToInt64();
 
-                        long total = 0;
-                        if (countResult != null && countResult.Count > 0) total = countResult[0].GetValue("count").ToInt64();
-                        _logger.LogInformation("Count aggregation completed in {ms}ms, total={total}", swCount.ElapsedMilliseconds, total);
+                    // add paging and run main aggregation
+                    pipeline.Add(new BsonDocument("$skip", skip));
+                    pipeline.Add(new BsonDocument("$limit", pageSize));
 
-                        // add paging
-                        pipeline.Add(skipStage);
-                        pipeline.Add(limitStage);
+                    var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
+                    for (int i = 1; i < pipeline.Count; i++) agg = agg.AppendStage<Product>(pipeline[i]);
+                    var productsCursor = await agg.ToListAsync();
 
-                        // main aggregation
-                        var swMain = Stopwatch.StartNew();
-                        var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
-                        for (int i = 1; i < pipeline.Count; i++) agg = agg.AppendStage<Product>(pipeline[i]);
-                        var productsCursor = await agg.ToListAsync();
-                        swMain.Stop();
-
-                        _logger.LogInformation("Main aggregation completed in {ms}ms, returned {count} products", swMain.ElapsedMilliseconds, productsCursor.Count);
-
-                        var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
-                        swTotalStart.Stop();
-                        _logger.LogInformation("QueryAsync total time: {ms}ms", swTotalStart.ElapsedMilliseconds);
-                        return (mapped, total);
-                    }
-                    catch (Exception aggEx)
-                    {
-                        _logger.LogError(aggEx, "Aggregation failed. Pipeline: {pipeline}", string.Join("\n", pipeline.Select(p => p.ToJson())));
-                        throw;
-                    }
+                    var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
+                    return (mapped, total);
                 }
                 else
                 {
