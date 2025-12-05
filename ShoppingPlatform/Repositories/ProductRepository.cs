@@ -116,7 +116,7 @@ namespace ShoppingPlatform.Repositories
             int pageSize,
             string? sort,
             string? country,
-            List<string>? color
+            List<string>? color, List<string>? sizes
         )
         {
             // Local helper: convert various stored numeric types to double?
@@ -208,7 +208,7 @@ namespace ShoppingPlatform.Repositories
                          .Select(c => new MongoDB.Bson.BsonRegularExpression(c.Trim(), "i"))
                 );
 
-                var colorDoc = new MongoDB.Bson.BsonDocument("availableColors",
+                var colorDoc = new MongoDB.Bson.BsonDocument("AvailableColors",
                     new MongoDB.Bson.BsonDocument("$in", regexes));
 
                 filters.Add((FilterDefinition<Product>)colorDoc);

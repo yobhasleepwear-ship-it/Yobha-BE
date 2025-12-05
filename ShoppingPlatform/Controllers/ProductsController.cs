@@ -45,6 +45,7 @@ namespace ShoppingPlatform.Controllers
             [FromQuery] decimal? maxPrice = null,
             [FromQuery] List<string>? fabric = null,
             [FromQuery] List<string>? color = null,
+            [FromQuery] List<string>? sizes = null,
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 20,
             [FromQuery] string? sort = "latest",
@@ -54,7 +55,7 @@ namespace ShoppingPlatform.Controllers
             if (page <= 0) page = 1;
             if (pageSize <= 0) pageSize = 20;
 
-            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, fabric, page, pageSize, sort, country,color);
+            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, fabric, page, pageSize, sort, country,color, sizes);
 
             var paged = new PagedResult<ProductListItemDto>
             {
