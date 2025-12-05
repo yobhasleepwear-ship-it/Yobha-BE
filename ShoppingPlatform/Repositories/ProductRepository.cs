@@ -213,6 +213,19 @@ namespace ShoppingPlatform.Repositories
 
                 filters.Add((FilterDefinition<Product>)colorDoc);
             }
+            // Color
+            if (sizes != null && sizes.Any())
+            {
+                var regexes = new MongoDB.Bson.BsonArray(
+                    sizes.Where(c => !string.IsNullOrWhiteSpace(c))
+                         .Select(c => new MongoDB.Bson.BsonRegularExpression(c.Trim(), "i"))
+                );
+
+                var SizeDoc = new MongoDB.Bson.BsonDocument("SizeOfProduct",
+                    new MongoDB.Bson.BsonDocument("$in", regexes));
+
+                filters.Add((FilterDefinition<Product>)SizeDoc);
+            }
 
             var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
 

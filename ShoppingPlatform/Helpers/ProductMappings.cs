@@ -51,20 +51,22 @@ namespace ShoppingPlatform.Helpers
             var availableColors = new List<string>();
             var availableSizes = new List<string>();
 
-            if (p.Inventory != null && p.Inventory.Count > 0)
-            {
-                availableColors = p.Inventory.Select(i => i.Color).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                availableSizes = p.Inventory.Select(i => i.Size).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            }
-            else if (p.Variants != null && p.Variants.Count > 0)
-            {
-                availableColors = p.Variants.Select(v => v.Color).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-                availableSizes = p.Variants.Select(v => v.Size).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            }
-            else if (p.SizeOfProduct != null && p.SizeOfProduct.Count > 0)
-            {
-                availableSizes = p.SizeOfProduct.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            }
+            //if (p.Inventory != null && p.Inventory.Count > 0)
+            //{
+            //    availableColors = p.Inventory.Select(i => i.Color).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            //    availableSizes = p.Inventory.Select(i => i.Size).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            //}
+            //else if (p.Variants != null && p.Variants.Count > 0)
+            //{
+            //    availableColors = p.Variants.Select(v => v.Color).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            //    availableSizes = p.Variants.Select(v => v.Size).Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            //}
+            //else if (p.SizeOfProduct != null && p.SizeOfProduct.Count > 0)
+            //{
+            //    availableSizes = p.SizeOfProduct.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            //}
+            availableColors = p.AvailableColors;
+            availableSizes = p.SizeOfProduct;
 
             // availability: prefer inventory quantities, then PriceList qty, then variants qty, then fallback to stock
             var available = false;
