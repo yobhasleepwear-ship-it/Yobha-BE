@@ -202,61 +202,55 @@ namespace ShoppingPlatform.Repositories
                 if (usePriceSort)
                 {
                     // ===== In-memory price-sort fallback =====
-                    // 1. Fetch candidate products matching non-price filters.
-                    //    We fetch a reasonable buffer (page * pageSize * multiplier)
-                    //    so that sorting in memory can return correct page results.
-                    int fetchMultiplier = 4; // tune: 4x pagesize is usually safe; increase if many items have same effectivePrice
-                    int fetchLimit = Math.Clamp(pageSize * fetchMultiplier, pageSize, 2000); // hard cap to avoid huge payloads
+                    int fetchMultiplier = 4;
+                    int fetchLimit = Math.Clamp(pageSize * fetchMultiplier, pageSize, 2000);
 
                     _logger.LogInformation("Using in-memory price-sort fallback. Fetching up to {limit} candidates", fetchLimit);
 
-                    // Query DB for non-price filtered products (projection to only fields we need could be added)
                     var candidates = await _collection.Find(nonPriceCombined)
                                                      .Limit(fetchLimit)
                                                      .ToListAsync();
 
                     _logger.LogInformation("Fetched {count} candidate products for in-memory sorting", candidates.Count);
 
-                    // Compute effectivePrice for each product in-memory
-                    var computed = new List<(Product product, double? effectivePrice, string debug)>();
+                    var computed = new List<(Product product, double? effectivePrice, string? debug)>();
                     foreach (var p in candidates)
                     {
                         double? eff = null;
-                        string debugMsg = null;
+                        string? debugMsg = null;
                         try
                         {
-                            // PriceList may be null
                             var priceList = p.PriceList ?? new List<Price>();
 
-                            // Filter by country when provided, else take all entries
                             var matched = string.IsNullOrWhiteSpace(country)
                                 ? priceList
                                 : priceList.Where(x => !string.IsNullOrWhiteSpace(x?.Country) && x.Country.Equals(country, StringComparison.OrdinalIgnoreCase)).ToList();
 
                             if (matched != null && matched.Count > 0)
                             {
-                                // Choose min PriceAmount among matched entries (change to First if you prefer)
-                                // Handle Decimal128 / decimal / double — try Convert.ToDouble
                                 double? minVal = null;
                                 foreach (var pl in matched)
                                 {
                                     if (pl == null) continue;
                                     try
                                     {
-                                        // pl.PriceAmount may be decimal, double, int, or MongoDB.Bson.Decimal128 depending on your model
                                         object raw = pl.PriceAmount!;
                                         double dv;
 
-                                        // try direct convert for common CLR types
                                         if (raw is decimal dec) dv = Convert.ToDouble(dec);
                                         else if (raw is double d) dv = d;
                                         else if (raw is float f) dv = Convert.ToDouble(f);
                                         else if (raw is long l) dv = Convert.ToDouble(l);
                                         else if (raw is int iv) dv = Convert.ToDouble(iv);
-                                        else if (raw is MongoDB.Bson.Decimal128 d128) dv = (double)d128.ToDecimal();
+                                        else if (raw is MongoDB.Bson.Decimal128 d128)
+                                        {
+                                            // Correct static call
+                                            var asDecimal = MongoDB.Bson.Decimal128.ToDecimal(d128);
+                                            dv = Convert.ToDouble(asDecimal);
+                                        }
                                         else
                                         {
-                                            // Attempt Convert.ToDouble as last resort
+                                            // Last resort - try Convert.ToDouble (may throw)
                                             dv = Convert.ToDouble(raw);
                                         }
 
@@ -267,7 +261,6 @@ namespace ShoppingPlatform.Repositories
                                     }
                                     catch (Exception exConv)
                                     {
-                                        // record conversion problem and continue
                                         debugMsg = $"PriceAmount conversion error for product {p.Id} priceListId={pl?.Id}: {exConv.Message}";
                                         _logger.LogWarning(debugMsg);
                                     }
@@ -276,7 +269,6 @@ namespace ShoppingPlatform.Repositories
                                 eff = minVal;
                             }
 
-                            // Fallback to top-level Price when no matched PriceList numeric value found
                             if (!eff.HasValue)
                             {
                                 try
@@ -287,7 +279,11 @@ namespace ShoppingPlatform.Repositories
                                         double dv;
                                         if (rawTop is decimal decT) dv = Convert.ToDouble(decT);
                                         else if (rawTop is double dd) dv = dd;
-                                        else if (rawTop is MongoDB.Bson.Decimal128 d128Top) dv = (double)d128Top.ToDecimal();
+                                        else if (rawTop is MongoDB.Bson.Decimal128 d128Top)
+                                        {
+                                            var asDecimalTop = MongoDB.Bson.Decimal128.ToDecimal(d128Top);
+                                            dv = Convert.ToDouble(asDecimalTop);
+                                        }
                                         else dv = Convert.ToDouble(rawTop);
 
                                         eff = dv;
@@ -309,44 +305,29 @@ namespace ShoppingPlatform.Repositories
                         computed.Add((p, eff, debugMsg));
                     }
 
-                    // Optionally log top few computed effectivePrice values for debugging
                     _logger.LogInformation("Sample effectivePrice values: {samples}",
                         string.Join(", ", computed.Take(10).Select(x => $"{x.product.Id}:{(x.effectivePrice.HasValue ? x.effectivePrice.Value.ToString("0.00") : "null")}")));
 
-                    // Apply minPrice / maxPrice filter in-memory (if provided)
                     var filteredComputed = computed.Where(c =>
                     {
-                        if (!c.effectivePrice.HasValue) return false; // hide products without any price
+                        if (!c.effectivePrice.HasValue) return false;
                         if (minPrice.HasValue && c.effectivePrice.Value < Convert.ToDouble(minPrice.Value)) return false;
                         if (maxPrice.HasValue && c.effectivePrice.Value > Convert.ToDouble(maxPrice.Value)) return false;
                         return true;
                     }).ToList();
 
-                    // Sort by effectivePrice
                     if (sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase))
                         filteredComputed = filteredComputed.OrderBy(c => c.effectivePrice ?? double.MaxValue).ToList();
                     else
                         filteredComputed = filteredComputed.OrderByDescending(c => c.effectivePrice ?? double.MinValue).ToList();
 
-                    // total should reflect whole set count — we can compute total by doing a CountDocumentsAsync for non-price filters,
-                    // but since we applied price filters in-memory we must compute total accordingly.
-                    // If you want total = total matching non-price filters (ignoring price filter) use:
-                    // long total = await _collection.CountDocumentsAsync(nonPriceCombined);
-                    // But commonly total must reflect price filters — so compute total from filteredComputed (note: limited by fetchLimit).
-                    // To get correct total we would need to scan entire matched set; we can't cheaply do that in-memory with fetchLimit.
-                    // We'll do this: get totalNonPrice = DB count (for UI), and totalFiltered = filteredComputed.Count (from fetched candidates).
                     var totalNonPrice = await _collection.CountDocumentsAsync(nonPriceCombined);
                     var totalFilteredInCandidates = filteredComputed.Count;
                     _logger.LogInformation("totalNonPrice={totalNonPrice}, totalFilteredInCandidates={totalFilteredInCandidates}", totalNonPrice, totalFilteredInCandidates);
 
-                    // Page the sorted results
                     var pageItems = filteredComputed.Skip(skip).Take(pageSize).Select(x => x.product).ToList();
-
-                    // Map results
                     var mapped = pageItems.Select(p => ProductMappings.ToListItemDto(p)).ToList();
 
-                    // NOTE: Because we only fetched 'fetchLimit' candidates, totalFilteredInCandidates may be smaller than real total.
-                    // You can increase fetchMultiplier or implement a proper aggregation for accurate total+paging.
                     return (mapped, totalFilteredInCandidates);
                 }
                 else
