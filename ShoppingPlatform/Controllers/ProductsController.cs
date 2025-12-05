@@ -35,32 +35,21 @@ namespace ShoppingPlatform.Controllers
         // GET: api/products
         // Returns: ApiResponse<PagedResult<ProductListItemDto>>
         // -------------------------------------------
-        [HttpGet]
+        [HttpPost]
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<PagedResult<ProductListItemDto>>>> Query(
-            [FromQuery] string? q,
-            [FromQuery] string? category,
-            [FromQuery] string? subCategory,
-            [FromQuery] decimal? minPrice = null,
-            [FromQuery] decimal? maxPrice = null,
-            [FromQuery] List<string>? fabric = null,
-            [FromQuery] List<string>? colors = null,
-            [FromQuery] List<string>? sizes = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 20,
-            [FromQuery] string? sort = "latest",
-            [FromQuery] string? country = null // optional filter (controller-level only)
-        )
+    [FromBody] ProductQueryRequest req
+)
         {
-            if (page <= 0) page = 1;
-            if (pageSize <= 0) pageSize = 20;
+            if (req.page <= 0) req.page = 1;
+            if (req.pageSize <= 0) req.pageSize = 20;
 
-            var (items, total) = await _repo.QueryAsync(q, category, subCategory, minPrice, maxPrice, fabric, page, pageSize, sort, country,colors, sizes);
+            var (items, total) = await _repo.QueryAsync(req.q, req.category, req.subCategory, req.minPrice, req.maxPrice, req.fabric, req.page, req.pageSize, req.sort, req.country,req.colors, req.sizes);
 
             var paged = new PagedResult<ProductListItemDto>
             {
-                Page = page,
-                PageSize = pageSize,
+                Page = req.page,
+                PageSize = req.pageSize,
                 TotalCount = total,
                 Items = items
             };

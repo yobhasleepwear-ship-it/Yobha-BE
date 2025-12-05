@@ -189,4 +189,22 @@ namespace ShoppingPlatform.Models
         public List<Price>? PriceList { get; set; }
         public string? Image { get; set; }
     }
+
+    public class ProductQueryRequest
+    {
+        public string? q { get; set; }
+        public string? category { get; set; }
+        public string? subCategory { get; set; }
+        public decimal? minPrice { get; set; }
+        public decimal? maxPrice { get; set; }
+        public List<string>? fabric { get; set; }
+        public List<string>? colors { get; set; }
+        public List<string>? sizes { get; set; }
+        public int page { get; set; } = 1;
+        public int pageSize { get; set; } = 20;
+        public string? sort { get; set; } = "latest";
+        public string? country { get; set; }
+    }
+
+
 }
