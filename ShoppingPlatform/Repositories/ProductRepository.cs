@@ -176,10 +176,10 @@ namespace ShoppingPlatform.Repositories
                 filters.Add((FilterDefinition<Product>)colorFilterDoc);
             }
 
-            // Non-price combined filter
+            // Non-price combined
             var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
 
-            // For non-aggregation find path: build priceElemMatch if client passed min/max/country (keeps prior behavior)
+            // priceElemMatch for find path (unchanged)
             FilterDefinition<Price>? priceElemMatch = null;
             if (minPrice.HasValue || maxPrice.HasValue || !string.IsNullOrWhiteSpace(country))
             {
@@ -195,34 +195,43 @@ namespace ShoppingPlatform.Repositories
 
             try
             {
+                _logger?.LogInformation("QueryAsync called. priceSort={priceSort} country={country} minPrice={minPrice} maxPrice={maxPrice} page={page} pageSize={pageSize}",
+                    usePriceSort, country, minPrice, maxPrice, page, pageSize);
+
                 if (usePriceSort)
                 {
+                    // Require country for first-match semantics
                     if (string.IsNullOrWhiteSpace(country))
                     {
-                        // if country is required for this behavior, but not provided, we can't pick first-country price.
-                        // Either fail or revert to previous behavior. Here we'll treat missing country as "no results".
+                        _logger?.LogWarning("Price sort requested but 'country' not provided -> returning empty results (first-match semantics)");
                         return (new List<ProductListItemDto>(), 0);
                     }
 
-                    // ---------------- Aggregation pipeline: first-match per country and exclude docs without matched PriceList ----------------
-                    // 1) match non-price filters
+                    // prepare uppercase country constant for case-insensitive match
+                    var countryUpper = country.Trim().ToUpperInvariant();
+
+                    // 1) $match non-price filters
                     var matchStage = new MongoDB.Bson.BsonDocument("$match", nonPriceCombined.ToBsonDocument());
 
-                    // 2) matchedPrices = $filter( PriceList, pl -> pl.Country == country )
+                    // 2) add matchedPrices array: filter PriceList elements whose toUpper(country) == countryUpper
+                    // use $ifNull to guard when PriceList missing
                     var matchedPricesExpr = new MongoDB.Bson.BsonDocument("$filter", new MongoDB.Bson.BsonDocument
             {
                 { "input", new MongoDB.Bson.BsonDocument("$ifNull", new MongoDB.Bson.BsonArray { "$PriceList", new MongoDB.Bson.BsonArray() }) },
                 { "as", "pl" },
-                { "cond", new MongoDB.Bson.BsonDocument("$eq", new MongoDB.Bson.BsonArray { "$$pl.Country", country }) }
+                // condition: compare uppercase trimmed values to countryUpper
+                { "cond", new MongoDB.Bson.BsonDocument("$eq", new MongoDB.Bson.BsonArray {
+                    new MongoDB.Bson.BsonDocument("$toUpper", new MongoDB.Bson.BsonDocument("$trim", "$$pl.Country")),
+                    countryUpper
+                }) }
             });
-
                     var addMatchedArrayStage = new MongoDB.Bson.BsonDocument("$addFields", new MongoDB.Bson.BsonDocument("matchedPrices", matchedPricesExpr));
 
-                    // 3) Exclude products where matchedPrices is empty -> require size(matchedPrices) > 0
+                    // 3) require matchedPrices non-empty (size > 0)
                     var requireMatchedStage = new MongoDB.Bson.BsonDocument("$match", new MongoDB.Bson.BsonDocument("$expr",
                         new MongoDB.Bson.BsonDocument("$gt", new MongoDB.Bson.BsonArray { new MongoDB.Bson.BsonDocument("$size", "$matchedPrices"), 0 })));
 
-                    // 4) map matchedPrices to numeric (safe convert) and pick first element
+                    // 4) map matchedPrices to numeric via $convert and pick FIRST element (index 0)
                     var mappedFirstPriceExpr = new MongoDB.Bson.BsonDocument("$arrayElemAt", new MongoDB.Bson.BsonArray
             {
                 new MongoDB.Bson.BsonDocument("$map", new MongoDB.Bson.BsonDocument
@@ -241,30 +250,29 @@ namespace ShoppingPlatform.Repositories
                 0
             });
 
-                    // 5) set firstMatchedPrice and effectivePrice (we use firstMatchedPrice for sort/filter)
                     var addFirstPriceStage = new MongoDB.Bson.BsonDocument("$addFields", new MongoDB.Bson.BsonDocument
             {
                 { "firstMatchedPrice", mappedFirstPriceExpr },
-                { "effectivePrice", mappedFirstPriceExpr } // alias for clarity
+                { "effectivePrice", mappedFirstPriceExpr } // alias; should be numeric except where conversion failed (then null and doc will drop below if min/max applied)
             });
 
-                    // 6) apply min/max on firstMatchedPrice if provided (via $expr)
-                    MongoDB.Bson.BsonDocument priceFilterMatchStage = null;
+                    // 5) apply min/max filters on firstMatchedPrice if provided
                     var priceExprFilters = new List<MongoDB.Bson.BsonDocument>();
                     if (minPrice.HasValue)
                         priceExprFilters.Add(new MongoDB.Bson.BsonDocument("$gte", new MongoDB.Bson.BsonArray { "$firstMatchedPrice", Convert.ToDouble(minPrice.Value) }));
                     if (maxPrice.HasValue)
                         priceExprFilters.Add(new MongoDB.Bson.BsonDocument("$lte", new MongoDB.Bson.BsonArray { "$firstMatchedPrice", Convert.ToDouble(maxPrice.Value) }));
+                    MongoDB.Bson.BsonDocument priceFilterMatchStage = null;
                     if (priceExprFilters.Count > 0)
                     {
                         priceFilterMatchStage = new MongoDB.Bson.BsonDocument("$match", new MongoDB.Bson.BsonDocument("$expr", new MongoDB.Bson.BsonDocument("$and", new MongoDB.Bson.BsonArray(priceExprFilters))));
                     }
 
-                    // 7) Sorting: deterministic; since we excluded docs without a matched price, effectivePrice should be numeric.
+                    // 6) sort by firstMatchedPrice then CreatedAt
                     var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
                     var sortStage = new MongoDB.Bson.BsonDocument("$sort", new MongoDB.Bson.BsonDocument { { "firstMatchedPrice", sortDirection }, { "CreatedAt", -1 } });
 
-                    // 8) build pipeline
+                    // assemble pipeline
                     var pipeline = new List<MongoDB.Bson.BsonDocument>
             {
                 matchStage,
@@ -275,34 +283,39 @@ namespace ShoppingPlatform.Repositories
                     if (priceFilterMatchStage != null) pipeline.Add(priceFilterMatchStage);
                     pipeline.Add(sortStage);
 
-                    // Count pipeline (same as pipeline but with $count)
-                    var countPipeline = new List<MongoDB.Bson.BsonDocument>(pipeline) { new MongoDB.Bson.BsonDocument("$count", "count") };
+                    // logging pipeline for troubleshooting
+                    _logger?.LogInformation("Price-sort pipeline (first-match) for country={country}: {pipeline}", countryUpper, string.Join("\n", pipeline.Select(p => p.ToJson(new MongoDB.Bson.IO.JsonWriterSettings { Indent = true }))));
 
-                    // Execute count
+                    // count pipeline
+                    var countPipeline = new List<MongoDB.Bson.BsonDocument>(pipeline) { new MongoDB.Bson.BsonDocument("$count", "count") };
                     var countAgg = _collection.Aggregate().AppendStage<MongoDB.Bson.BsonDocument>(countPipeline[0]);
                     for (int i = 1; i < countPipeline.Count; i++) countAgg = countAgg.AppendStage<MongoDB.Bson.BsonDocument>(countPipeline[i]);
                     var countResult = await countAgg.ToListAsync();
                     long total = 0;
                     if (countResult != null && countResult.Count > 0) total = countResult[0].GetValue("count").ToInt64();
+                    _logger?.LogInformation("Count result for first-match pipeline: total={total}", total);
 
-                    // add pagination
+                    // add paging and run main aggregation
                     pipeline.Add(new MongoDB.Bson.BsonDocument("$skip", skip));
                     pipeline.Add(new MongoDB.Bson.BsonDocument("$limit", pageSize));
 
-                    // run aggregation
                     var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
                     for (int i = 1; i < pipeline.Count; i++) agg = agg.AppendStage<Product>(pipeline[i]);
 
                     var productsCursor = await agg.ToListAsync();
+                    _logger?.LogInformation("First-match price-sort aggregation returned {count} documents", productsCursor.Count);
+
                     var mapped = productsCursor.Select(p => ProductMappings.ToListItemDto(p)).ToList();
                     return (mapped, total);
                 }
                 else
                 {
-                    // Non-price path: keep prior behavior (apply priceElemMatch if present)
+                    // Non-price path: existing Find behavior (apply priceElemMatch if present)
                     var combinedForFindList = new List<FilterDefinition<Product>>(filters);
                     if (priceElemMatch != null) combinedForFindList.Add(builder.ElemMatch(p => p.PriceList, priceElemMatch));
                     var combinedFilterFinal = combinedForFindList.Count > 0 ? builder.And(combinedForFindList) : builder.Empty;
+
+                    _logger?.LogInformation("Executing Find with filter: {filter}", combinedFilterFinal.ToBsonDocument().ToJson());
 
                     var total = await _collection.CountDocumentsAsync(combinedFilterFinal);
 
@@ -331,6 +344,7 @@ namespace ShoppingPlatform.Repositories
                 throw;
             }
         }
+
 
 
 
