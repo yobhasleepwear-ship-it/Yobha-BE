@@ -35,7 +35,7 @@ namespace ShoppingPlatform.Controllers
         // GET: api/products
         // Returns: ApiResponse<PagedResult<ProductListItemDto>>
         // -------------------------------------------
-        [HttpPost]
+        [HttpPost("Query")]
         [AllowAnonymous]
         public async Task<ActionResult<ApiResponse<PagedResult<ProductListItemDto>>>> Query(
     [FromBody] ProductQueryRequest req
