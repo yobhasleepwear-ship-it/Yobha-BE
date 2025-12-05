@@ -197,10 +197,48 @@ namespace ShoppingPlatform.Repositories
             }
 
             // Fabric
+            
             if (fabric != null && fabric.Any())
-                filters.Add(builder.AnyIn(p => p.FabricType, fabric));
+            {
+                var fabricList = fabric
+                    .Where(c => !string.IsNullOrWhiteSpace(c))
+                    .Select(c => c.Trim())
+                    .ToList();
 
-            // Color
+                if (fabricList.Count > 0)
+                {
+                    var orFilters = new List<FilterDefinition<Product>>();
+
+                    // check both "AvailableColors" and "availableColors"
+                    var fieldNames = new[] { "FabricType", "fabricType" };
+
+                    foreach (var fname in fieldNames)
+                    {
+                        var perFieldOr = new List<FilterDefinition<Product>>();
+                        foreach (var c in fabricList)
+                        {
+                            var escaped = Regex.Escape(c);
+                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring match
+                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
+                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
+                        }
+
+                        if (perFieldOr.Count == 1)
+                            orFilters.Add(perFieldOr[0]);
+                        else
+                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
+                    }
+
+                    // If any of the field-name checks match -> include product
+                    if (orFilters.Count == 1)
+                        filters.Add(orFilters[0]);
+                    else
+                        filters.Add(Builders<Product>.Filter.Or(orFilters));
+                }
+            }
+            // make sure at top: using System.Text.RegularExpressions;
+
+            // ---------- Colors (defensive: check both PascalCase and camelCase field names) ----------
             if (color != null && color.Any())
             {
                 var colorList = color
@@ -210,42 +248,73 @@ namespace ShoppingPlatform.Repositories
 
                 if (colorList.Count > 0)
                 {
-                    var orArray = new MongoDB.Bson.BsonArray();
-                    foreach (var c in colorList)
+                    var orFilters = new List<FilterDefinition<Product>>();
+
+                    // check both "AvailableColors" and "availableColors"
+                    var fieldNames = new[] { "AvailableColors", "availableColors" };
+
+                    foreach (var fname in fieldNames)
                     {
-                        // { availableColors: { $regex: "<pattern>", $options: "i" } }
-                        var regexDoc = new MongoDB.Bson.BsonDocument
-            {
-                {
-                    "AvailableColors",
-                    new MongoDB.Bson.BsonDocument
-                    {
-                        { "$regex", c },
-                        { "$options", "i" }
-                    }
-                }
-            };
-                        orArray.Add(regexDoc);
+                        var perFieldOr = new List<FilterDefinition<Product>>();
+                        foreach (var c in colorList)
+                        {
+                            var escaped = Regex.Escape(c);
+                            var pattern = $"^{escaped}$"; // exact token; remove anchors for substring match
+                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
+                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
+                        }
+
+                        if (perFieldOr.Count == 1)
+                            orFilters.Add(perFieldOr[0]);
+                        else
+                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
                     }
 
-                    var orDoc = new MongoDB.Bson.BsonDocument("$or", orArray);
-                    filters.Add((FilterDefinition<Product>)orDoc);
+                    // If any of the field-name checks match -> include product
+                    if (orFilters.Count == 1)
+                        filters.Add(orFilters[0]);
+                    else
+                        filters.Add(Builders<Product>.Filter.Or(orFilters));
                 }
             }
 
-            // sizes
+            // ---------- Sizes (defensive: check possible field names) ----------
             if (sizes != null && sizes.Any())
             {
-                var regexes = new MongoDB.Bson.BsonArray(
-                    sizes.Where(c => !string.IsNullOrWhiteSpace(c))
-                         .Select(c => new MongoDB.Bson.BsonRegularExpression(c.Trim(), "i"))
-                );
+                var sizeList = sizes
+                    .Where(s => !string.IsNullOrWhiteSpace(s))
+                    .Select(s => s.Trim())
+                    .ToList();
 
-                var SizeDoc = new MongoDB.Bson.BsonDocument("SizeOfProduct",
-                    new MongoDB.Bson.BsonDocument("$in", regexes));
+                if (sizeList.Count > 0)
+                {
+                    var orFilters = new List<FilterDefinition<Product>>();
+                    var fieldNames = new[] { "SizeOfProduct", "availableSizes", "AvailableSizes" };
 
-                filters.Add((FilterDefinition<Product>)SizeDoc);
+                    foreach (var fname in fieldNames)
+                    {
+                        var perFieldOr = new List<FilterDefinition<Product>>();
+                        foreach (var s in sizeList)
+                        {
+                            var escaped = Regex.Escape(s);
+                            var pattern = $"^{escaped}$";
+                            var regex = new MongoDB.Bson.BsonRegularExpression(pattern, "i");
+                            perFieldOr.Add(Builders<Product>.Filter.Regex(fname, regex));
+                        }
+
+                        if (perFieldOr.Count == 1)
+                            orFilters.Add(perFieldOr[0]);
+                        else
+                            orFilters.Add(Builders<Product>.Filter.Or(perFieldOr));
+                    }
+
+                    if (orFilters.Count == 1)
+                        filters.Add(orFilters[0]);
+                    else
+                        filters.Add(Builders<Product>.Filter.Or(orFilters));
+                }
             }
+
 
             var nonPriceCombined = filters.Count > 0 ? builder.And(filters) : builder.Empty;
 
