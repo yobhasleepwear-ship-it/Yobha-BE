@@ -207,69 +207,123 @@ namespace ShoppingPlatform.Repositories
             var usePriceSort = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase)
                             || sortDef.Equals("price_desc", StringComparison.OrdinalIgnoreCase);
 
+            // inside your method, replace the usePriceSort branch with this code
             if (usePriceSort)
             {
-                // Build aggregation pipeline:
-                // 1. $match combinedFilter
-                // 2. $addFields effectivePrice = min(map(filtered PriceList -> PriceAmount)) or fallback to top-level Price
-                // 3. $sort by effectivePrice (asc/desc), then CreatedAt desc
-                // 4. $skip / $limit
-
-                // Build price list filter expression: if country specified, filter PriceList by country; else use whole PriceList
-                BsonDocument priceListFilteredExpr;
+                // Build BSON expressions
+                // 1) filter PriceList by country if provided, else take full PriceList (and coalesce to empty array)
+                BsonValue priceListFilteredExpr;
                 if (!string.IsNullOrWhiteSpace(country))
                 {
                     priceListFilteredExpr = new BsonDocument("$filter", new BsonDocument
-            {
-                { "input", "$PriceList" },
-                { "as", "pl" },
-                { "cond", new BsonDocument("$eq", new BsonArray { "$$pl.Country", country }) }
-            });
+        {
+            { "input", new BsonDocument("$ifNull", new BsonArray { "$PriceList", new BsonArray() }) },
+            { "as", "pl" },
+            { "cond", new BsonDocument("$eq", new BsonArray { "$$pl.Country", country }) }
+        });
                 }
                 else
                 {
-                    // use whole PriceList (if null -> empty array)
                     priceListFilteredExpr = new BsonDocument("$ifNull", new BsonArray { "$PriceList", new BsonArray() });
                 }
 
-                // Map filtered price list to numeric amounts
+                // 2) map to numeric values (use $toDouble to be safe with Decimal128)
                 var priceAmountsMap = new BsonDocument("$map", new BsonDocument
-        {
-            { "input", priceListFilteredExpr },
-            { "as", "p" },
-            { "in", "$$p.PriceAmount" }
-        });
+    {
+        { "input", priceListFilteredExpr },
+        { "as", "p" },
+        // convert to numeric for comparisons
+        { "in", new BsonDocument("$toDouble", "$$p.PriceAmount") }
+    });
 
-                // effectivePrice: try min(priceAmounts), if null fallback to top-level Price
+                // 3) effectivePrice = min(mapped) OR fallback to top-level Price (converted to double)
                 var effectivePriceExpr = new BsonDocument("$ifNull", new BsonArray
-        {
-            new BsonDocument("$min", priceAmountsMap),
-            "$Price"
-        });
+    {
+        new BsonDocument("$min", priceAmountsMap),
+        new BsonDocument("$toDouble", "$Price")
+    });
 
-                var matchStage = new BsonDocument("$match", combinedFilter.ToBsonDocument());
-                var addFieldsStage = new BsonDocument("$addFields", new BsonDocument { { "effectivePrice", effectivePriceExpr } });
+                // Build pipeline
+                var pipeline = new List<BsonDocument>();
 
+                // MATCH stage: apply combinedFilter but *without* any elemMatch price filters.
+                // We must rebuild combinedFilter excluding the price elemMatch because price checks will be done later.
+                // Simplest: build 'nonPriceFilters' by removing any filter on PriceList from your earlier filters.
+                // For brevity, you can reconstruct the non-price filter here programmatically:
+                var nonPriceFilters = new List<FilterDefinition<Product>>();
+
+                // Base same as earlier
+                nonPriceFilters.Add(builder.Eq(p => p.IsActive, true));
+                nonPriceFilters.Add(builder.Eq(p => p.IsDeleted, false));
+                if (!string.IsNullOrWhiteSpace(q))
+                {
+                    var qLower = q.Trim();
+                    nonPriceFilters.Add(builder.Or(
+                        builder.Regex(p => p.Name, new BsonRegularExpression(qLower, "i")),
+                        builder.Regex(p => p.Description, new BsonRegularExpression(qLower, "i")),
+                        builder.Regex(p => p.Slug, new BsonRegularExpression(qLower, "i"))
+                    ));
+                }
+                if (!string.IsNullOrWhiteSpace(category))
+                {
+                    var cat = category.Trim();
+                    nonPriceFilters.Add(builder.Or(
+                        builder.Eq(p => p.ProductCategory, cat),
+                        builder.Eq(p => p.ProductSubCategory, cat),
+                        builder.Eq(p => p.ProductMainCategory, cat)
+                    ));
+                }
+                if (!string.IsNullOrWhiteSpace(subCategory))
+                {
+                    var subCat = subCategory.Trim();
+                    nonPriceFilters.Add(builder.Eq(p => p.ProductCategory, subCat));
+                }
+                if (fabric != null && fabric.Any()) nonPriceFilters.Add(builder.AnyIn(p => p.FabricType, fabric));
+                if (color != null && color.Any()) nonPriceFilters.Add(builder.AnyIn(p => p.AvailableColors, color));
+
+                var nonPriceCombined = nonPriceFilters.Count > 0 ? builder.And(nonPriceFilters) : builder.Empty;
+                pipeline.Add(new BsonDocument("$match", nonPriceCombined.ToBsonDocument()));
+
+                // ADDFIELDS stage: compute effectivePrice
+                pipeline.Add(new BsonDocument("$addFields",
+                    new BsonDocument
+                    {
+            { "effectivePrice", effectivePriceExpr }
+                    }
+                ));
+
+                // If minPrice/maxPrice are provided, add a $match on effectivePrice using $expr (because effectivePrice is a field now)
+                var priceExprFilters = new List<BsonDocument>();
+                if (minPrice.HasValue)
+                {
+                    priceExprFilters.Add(new BsonDocument("$gte", new BsonArray { "$effectivePrice", Convert.ToDouble(minPrice.Value) }));
+                }
+                if (maxPrice.HasValue)
+                {
+                    priceExprFilters.Add(new BsonDocument("$lte", new BsonArray { "$effectivePrice", Convert.ToDouble(maxPrice.Value) }));
+                }
+                if (priceExprFilters.Count > 0)
+                {
+                    var exprAnd = new BsonDocument("$and", new BsonArray(priceExprFilters));
+                    pipeline.Add(new BsonDocument("$match", new BsonDocument("$expr", exprAnd)));
+                }
+
+                // SORT stage: by effectivePrice then CreatedAt
                 var sortDirection = sortDef.Equals("price_asc", StringComparison.OrdinalIgnoreCase) ? 1 : -1;
-                var sortStage = new BsonDocument("$sort", new BsonDocument
-        {
-            { "effectivePrice", sortDirection },
-            { "CreatedAt", -1 } // deterministic fallback
-        });
+                pipeline.Add(new BsonDocument("$sort", new BsonDocument
+    {
+        { "effectivePrice", sortDirection },
+        { "CreatedAt", -1 }
+    }));
 
-                var pipeline = new[]
-                {
-            matchStage,
-            addFieldsStage,
-            sortStage,
-            new BsonDocument("$skip", skip),
-            new BsonDocument("$limit", pageSize)
-        };
+                pipeline.Add(new BsonDocument("$skip", skip));
+                pipeline.Add(new BsonDocument("$limit", pageSize));
 
-                var agg = _collection.Aggregate().AppendStage<Product>(pipeline[0]);
-                for (int i = 1; i < pipeline.Length; i++)
+                // Run aggregation
+                var agg = _collection.Aggregate();
+                foreach (var stage in pipeline)
                 {
-                    agg = agg.AppendStage<Product>(pipeline[i]);
+                    agg = agg.AppendStage<Product>(stage);
                 }
 
                 var productsCursor = await agg.ToListAsync();
