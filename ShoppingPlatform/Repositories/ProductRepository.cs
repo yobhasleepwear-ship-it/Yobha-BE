@@ -964,5 +964,16 @@ namespace ShoppingPlatform.Repositories
             var result = await _collection.UpdateOneAsync(filter, update);
             // optionally verify ModifiedCount and log if zero (no matching price entry)
         }
+
+        public async Task InsertManyAsync(List<Product> products)
+        {
+            if (products == null || products.Count == 0)
+                return;
+
+            await _collection.InsertManyAsync(products, new InsertManyOptions
+            {
+                IsOrdered = false // IMPORTANT: continues insert even if one fails
+            });
+        }
     }
 }

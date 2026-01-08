@@ -42,5 +42,7 @@ namespace ShoppingPlatform.Repositories
         // returns true if the stock was decremented (atomic check stock >= qty and update), false otherwise
         Task IncrementStockAsync(string productObjectId, string size, string currency, int quantity);
         // used for rollback; throws on failure
+        Task InsertManyAsync(List<Product> products);
+
     }
 }

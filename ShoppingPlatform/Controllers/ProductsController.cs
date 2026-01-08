@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -291,6 +292,152 @@ namespace ShoppingPlatform.Controllers
             var ok = ApiResponse<List<CategoryCount>>.Ok(cats, "OK");
             return Ok(ok);
         }
+
+        [HttpPost("bulk-upload")]
+        public async Task<IActionResult> BulkUpload(IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+                return BadRequest("Excel file required");
+
+            var products = new List<Product>();
+            var errors = new List<object>();
+
+            using var stream = new MemoryStream();
+            await file.CopyToAsync(stream);
+
+            using var workbook = new XLWorkbook(stream);
+            var sheet = workbook.Worksheet("Products");
+            var rows = sheet.RowsUsed().Skip(1);
+
+            int rowNumber = 1;
+
+            foreach (var row in rows)
+            {
+                rowNumber++;
+
+                try
+                {
+                    var product = BuildProduct(row);
+                    products.Add(product);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(new
+                    {
+                        Row = rowNumber,
+                        ProductId = row.Cell(1).GetString(),
+                        Error = ex.Message
+                    });
+                }
+            }
+
+            if (products.Any())
+                await _repo.InsertManyAsync(products);
+
+            return Ok(new
+            {
+                Total = products.Count + errors.Count,
+                Inserted = products.Count,
+                Failed = errors.Count,
+                Errors = errors
+            });
+        }
+
+        private Product BuildProduct(IXLRow row)
+        {
+            return new Product
+            {
+                ProductId = row.Cell("A").GetString(),
+                Name = row.Cell("B").GetString(),
+                Slug = row.Cell("C").GetString(),
+                Description = row.Cell("D").GetString(),
+
+                ProductMainCategory = row.Cell("E").GetString(),
+                ProductCategory = row.Cell("F").GetString(),
+                ProductSubCategory = row.Cell("G").GetString(),
+
+                IsActive = row.Cell("H").GetBoolean(),
+                IsFeatured = row.Cell("I").GetBoolean(),
+
+                SizeOfProduct = SplitList(row.Cell("J").GetString()),
+                AvailableColors = SplitList(row.Cell("K").GetString()),
+                FabricType = SplitList(row.Cell("L").GetString()),
+
+                Images = ParseImages(row.Cell("M").GetString()),
+                PriceList = ParsePriceList(row.Cell("N").GetString()),
+                CountryPrices = ParseCountryPrices(row.Cell("O").GetString()),
+
+                Specifications = new ProductSpecifications
+                {
+                    Fabric = row.Cell("P").GetString(),
+                    Length = row.Cell("Q").GetString(),
+                    Origin = row.Cell("R").GetString(),
+                    Fit = row.Cell("S").GetString(),
+                    Care = row.Cell("T").GetString(),
+                    Extra = ParseExtraSpecs(row.Cell("U").GetString())
+                },
+
+                KeyFeatures = SplitList(row.Cell("V").GetString()),
+                CareInstructions = SplitList(row.Cell("W").GetString()),
+
+                FreeDelivery = row.Cell("X").GetBoolean(),
+                ReturnPolicy = row.Cell("Y").GetString(),
+
+                ShippingInfo = new ShippingInfo
+                {
+                    FreeShipping = row.Cell("Z").GetBoolean(),
+                    EstimatedDelivery = row.Cell("AA").GetString(),
+                    CashOnDelivery = row.Cell("AB").GetBoolean()
+                }
+            };
+        }
+
+        List<string> SplitList(string value) =>
+    string.IsNullOrWhiteSpace(value)
+        ? new()
+        : value.Split('|').Select(x => x.Trim()).ToList();
+
+        List<ProductImage> ParseImages(string value) =>
+            SplitList(value).Select(u => new ProductImage { Url = u }).ToList();
+
+        List<Price> ParsePriceList(string value)
+        {
+            return SplitList(value).Select(p =>
+            {
+                var x = p.Split(':');
+                return new Price
+                {
+                    Size = x[0],
+                    Country = x[1],
+                    PriceAmount = decimal.Parse(x[2]),
+                    Currency = x[3]
+                };
+            }).ToList();
+        }
+
+        List<CountryPrice> ParseCountryPrices(string value)
+        {
+            return SplitList(value).Select(p =>
+            {
+                var x = p.Split(':');
+                return new CountryPrice
+                {
+                    Country = x[0],
+                    PriceAmount = decimal.Parse(x[1]),
+                    Currency = x[2]
+                };
+            }).ToList();
+        }
+
+        List<SpecificationField> ParseExtraSpecs(string value)
+        {
+            return SplitList(value).Select(e =>
+            {
+                var x = e.Split(':');
+                return new SpecificationField { Key = x[0], Value = x[1] };
+            }).ToList();
+        }
+
 
         // -------------------------
         // Helper: ensure nested ids exist (PriceList, CountryPrices, Inventory, Variants, Spec extra, Reviews, Images)
