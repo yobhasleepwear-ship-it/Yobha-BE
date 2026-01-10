@@ -73,5 +73,18 @@
         public decimal CodAmount { get; set; }
     }
 
+    public class DeliveryStatusUpdateRequest
+    {
+        public string Awb { get; set; }
+        public string Status { get; set; }          // e.g. "In Transit"
+        public string? StatusCode { get; set; }     // Optional
+        public DateTime? StatusDateTime { get; set; }
+        public string? Location { get; set; }
+    }
+    public class ShipmentReference
+    {
+        public string ReferenceId { get; set; }
+        public string ReferenceType { get; set; } // Order / Buyback / Return
+    }
 
 }

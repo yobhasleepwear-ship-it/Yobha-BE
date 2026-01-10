@@ -13,5 +13,7 @@ namespace ShoppingPlatform.Repositories
         Task<bool> UpdateDeliveryDetailsAsync(
     string referenceId,
     DeliveryDetails request);
+        Task<bool> UpdateDeliveryStatusAsync(string referenceId, string newStatus);
+        Task<ReturnOrder?> GetByAwbAsync(string awb);
     }
 }

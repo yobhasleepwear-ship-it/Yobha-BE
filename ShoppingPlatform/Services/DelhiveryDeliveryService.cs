@@ -156,5 +156,19 @@ namespace ShoppingPlatform.Services
 
             return responseBody;
         }
+
+        public async Task SchedulePickupAsync(string awb)
+        {
+            await EnsureSecretsLoadedAsync();
+
+            var payload = new
+            {
+                waybill = awb,
+                pickup_date = DateTime.UtcNow.ToString("yyyy-MM-dd")
+            };
+
+            var responseBody = await PostAsync("/api/p/pickup", payload);
+        }
+
     }
 }

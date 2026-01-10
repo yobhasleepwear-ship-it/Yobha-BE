@@ -8,6 +8,7 @@ namespace ShoppingPlatform.Services
         Task<string> TrackShipmentAsync(string awb);
         Task CancelShipmentAsync(string awb);
         Task<string> CreateDomesticShipmentAsync(DomesticShipmentRequest request);
+        Task SchedulePickupAsync(string awb);
 
     }
 

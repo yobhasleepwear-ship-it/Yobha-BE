@@ -34,7 +34,7 @@ namespace ShoppingPlatform.Controllers
                 return BadRequest("OrderId is required");
 
             string awb;
-            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("");
+            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("DELHIVERY");
 
             // 🌍 INTERNATIONAL
             if (request.IsInternational)
@@ -129,6 +129,67 @@ namespace ShoppingPlatform.Controllers
             return Ok();
         }
 
+        [HttpPost("schedule-pickup/{awb}")]
+        public async Task<IActionResult> SchedulePickup(
+            string awb,
+            string referenceId,
+            string referenceType)
+        {
+            await _deliveryService.SchedulePickupAsync(awb);
+
+            await UpdateDeliveryStatusAsync(
+                referenceId,
+                referenceType,
+                "PICKUP_SCHEDULED");
+
+            return Ok(new
+            {
+                awb,
+                status = "PICKUP_SCHEDULED"
+            });
+        }
+
+        [HttpPost("status-update")]
+        public async Task<IActionResult> UpdateDeliveryStatusFromCourier(
+    [FromBody] DeliveryStatusUpdateRequest request)
+        {
+            if (!Request.Headers.TryGetValue("X-DELHIVERY-TOKEN", out var token))
+                return Unauthorized("Missing token");
+
+            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("DELHIVERY");
+
+            if (secretsDoc == null || token != secretsDoc.DelhiveryWebhookToken)
+                return Unauthorized("Invalid token");
+
+            if (string.IsNullOrWhiteSpace(request.Awb))
+                return BadRequest("AWB is required");
+
+            if (string.IsNullOrWhiteSpace(request.Status))
+                return BadRequest("Status is required");
+
+            // 1️⃣ Find shipment by AWB
+            var shipment = await FindShipmentByAwbAsync(request.Awb);
+
+            if (shipment == null)
+                return NotFound("Shipment not found for given AWB");
+
+            // 2️⃣ Map courier status → internal status
+            var internalStatus = MapCourierStatus(request.Status);
+
+            // 3️⃣ Update status
+           var res = await UpdateDeliveryStatusAsync(
+                shipment.ReferenceId,
+                shipment.ReferenceType,
+                internalStatus);
+
+            return Ok(new
+            {
+                awb = request.Awb,
+                status = internalStatus
+            });
+        }
+
+
         private async Task<bool> UpdateShipmentAsync(
      string referenceId,
      string referenceType,
@@ -155,7 +216,83 @@ namespace ShoppingPlatform.Controllers
             }
         }
 
+        private async Task<bool> UpdateDeliveryStatusAsync(
+            string referenceId,
+            string referenceType,
+            string newStatus)
+        {
+            switch (referenceType)
+            {
+                case "Order":
+                    return await _orderRepo.UpdateDeliveryStatusAsync(
+                        referenceId,
+                        newStatus);
 
+                case "Buyback":
+                    return await _buybackRepo.UpdateDeliveryStatusAsync(
+                        referenceId,
+                        newStatus);
+
+                case "Return":
+                    return await _returnRepo.UpdateDeliveryStatusAsync(
+                        referenceId,
+                        newStatus);
+
+                default:
+                    throw new Exception("Invalid ReferenceType");
+            }
+        }
+
+        private async Task<ShipmentReference?> FindShipmentByAwbAsync(string awb)
+        {
+            var order = await _orderRepo.GetByAwbAsync(awb);
+            if (order != null)
+            {
+                return new ShipmentReference
+                {
+                    ReferenceId = order.Id,
+                    ReferenceType = "Order"
+                };
+            }
+
+            var buyback = await _buybackRepo.GetByAwbAsync(awb);
+            if (buyback != null)
+            {
+                return new ShipmentReference
+                {
+                    ReferenceId = buyback.Id,
+                    ReferenceType = "Buyback"
+                };
+            }
+
+            var ret = await _returnRepo.GetByAwbAsync(awb);
+            if (ret != null)
+            {
+                return new ShipmentReference
+                {
+                    ReferenceId = ret.Id,
+                    ReferenceType = "Return"
+                };
+            }
+
+            return null;
+        }
+
+        private string MapCourierStatus(string courierStatus)
+        {
+            return courierStatus.ToLower() switch
+            {
+                "pickup scheduled" => "PICKUP_SCHEDULED",
+                "picked up" => "PICKED_UP",
+                "in transit" => "IN_TRANSIT",
+                "out for delivery" => "OUT_FOR_DELIVERY",
+                "delivered" => "DELIVERED",
+                "rto" => "RTO",
+                "cancelled" => "CANCELLED",
+                "failed" => "FAILED",
+                _ => "IN_TRANSIT" // safe default
+            };
+        }
 
     }
 

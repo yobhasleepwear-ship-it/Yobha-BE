@@ -115,5 +115,31 @@ namespace ShoppingPlatform.Repositories
 
             return result.MatchedCount > 0;
         }
+
+        public async Task<bool> UpdateDeliveryStatusAsync(
+   string orderId,
+   string status)
+        {
+            var update = Builders<ReturnOrder>.Update
+                .Set(x => x.deliveryDetails.Status, status)
+                .Set(x => x.deliveryDetails.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _collection.UpdateOneAsync(
+                x => x.Id == orderId,
+                update);
+
+            return result.MatchedCount > 0;
+        }
+
+        public async Task<ReturnOrder?> GetByAwbAsync(string awb)
+        {
+            if (string.IsNullOrWhiteSpace(awb))
+                return null;
+
+            return await _collection.Find(x =>
+                x.deliveryDetails != null &&
+                x.deliveryDetails.Awb == awb
+            ).FirstOrDefaultAsync();
+        }
     }
 }
