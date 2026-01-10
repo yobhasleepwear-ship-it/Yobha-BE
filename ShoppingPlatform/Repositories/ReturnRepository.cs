@@ -87,5 +87,33 @@ namespace ShoppingPlatform.Repositories
                 _log.LogError(ex, "Error ensuring indexes on returnorders collection.");
             }
         }
+
+        public async Task<bool> UpdateDeliveryDetailsAsync(
+    string referenceId,
+    DeliveryDetails request)
+        {
+            var delivery = new DeliveryDetails
+            {
+                Awb = request.Awb, // only if present
+                Courier = "DELHIVERY",
+                IsCod = request.IsCod,
+                CodAmount = request.IsCod ? request.CodAmount : 0,
+                IsInternational = request.IsInternational,
+                Status = "READY_TO_SHIP",
+                Type = request.Type,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var update = Builders<ReturnOrder>.Update
+                .Set(x => x.deliveryDetails, delivery)
+                .Set(x => x.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _collection.UpdateOneAsync(
+                x => x.Id == referenceId,
+                update);
+
+            return result.MatchedCount > 0;
+        }
     }
 }

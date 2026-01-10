@@ -10,6 +10,8 @@ namespace ShoppingPlatform.Repositories
         Task UpdateAsync(ReturnOrder r);
         Task<List<ReturnOrder>> GetByOrderNumberAsync(string? orderNumber);
         Task<List<ReturnOrder>> GetAllAsync();
-
+        Task<bool> UpdateDeliveryDetailsAsync(
+    string referenceId,
+    DeliveryDetails request);
     }
 }

@@ -27,5 +27,8 @@ namespace ShoppingPlatform.Repositories
         Task<CreateOrderResponse> CreateOrderAsync(CreateOrderRequestV2 req, string userId);
         Task<bool> UpdatePaymentStatusAsync(string razorpayOrderId, string razorpayPaymentId, bool isSuccess);
         Task<bool> updateOrderForReturn(string orderNumber, List<OrderItem> returnItems);
+        Task<bool> UpdateDeliveryDetailsAsync(
+            string referenceId,
+            DeliveryDetails request);
     }
 }

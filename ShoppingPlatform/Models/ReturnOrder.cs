@@ -44,5 +44,8 @@ namespace ShoppingPlatform.Models
         // Admin who processed (optional)
         public string? ProcessedByAdminId { get; set; }
         public DateTime? ProcessedAt { get; set; }
+
+        public DeliveryDetails? deliveryDetails { get; set; } = new DeliveryDetails();
+
     }
 }

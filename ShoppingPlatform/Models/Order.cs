@@ -116,8 +116,29 @@ namespace ShoppingPlatform.Models
         [BsonRepresentation(BsonType.Decimal128)]
         public decimal? shippingPrice { get; set; }
 
-        
+        public DeliveryDetails? deliveryDetails { get; set; } = new DeliveryDetails();
     }
+
+    public class DeliveryDetails
+    {
+        public string Courier { get; set; } = "DELHIVERY";
+        public string Awb { get; set; }
+
+        // Forward / Reverse / International
+        public string Type { get; set; }
+
+        // READY_TO_SHIP, IN_TRANSIT, DELIVERED, etc.
+        public string Status { get; set; }
+
+        public bool IsCod { get; set; }
+        public decimal CodAmount { get; set; }
+
+        public bool IsInternational { get; set; }
+
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
+    }
+
 
 
     public class OrderFilter

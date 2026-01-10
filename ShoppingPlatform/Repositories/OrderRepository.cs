@@ -12,6 +12,8 @@ using ShoppingPlatform.Helpers;
 using Xunit.Sdk;
 using System.Text.RegularExpressions;
 using ShoppingPlatform.Services;
+using DocumentFormat.OpenXml.Drawing.Charts;
+using Order = ShoppingPlatform.Models.Order;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -701,6 +703,34 @@ namespace ShoppingPlatform.Repositories
             var replaceResult = await _col.ReplaceOneAsync(filter, order);
 
             return replaceResult.IsAcknowledged && replaceResult.ModifiedCount > 0;
+        }
+
+        public async Task<bool> UpdateDeliveryDetailsAsync(
+            string referenceId,
+            DeliveryDetails request)
+        {
+            var delivery = new DeliveryDetails
+            {
+                Awb = request.Awb, // only if present
+                Courier = "DELHIVERY",
+                IsCod = request.IsCod,
+                CodAmount = request.IsCod ? request.CodAmount : 0,
+                IsInternational = request.IsInternational,
+                Status = "READY_TO_SHIP",
+                Type =  request.Type,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            var update = Builders<Order>.Update
+                .Set(x => x.deliveryDetails, delivery)
+                .Set(x => x.UpdatedAt, DateTime.UtcNow);
+
+            var result = await _col.UpdateOneAsync(
+                x => x.Id == referenceId,
+                update);
+
+            return result.MatchedCount > 0;
         }
 
     }

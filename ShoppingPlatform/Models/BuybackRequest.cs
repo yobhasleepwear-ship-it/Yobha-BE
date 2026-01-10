@@ -29,6 +29,8 @@ namespace ShoppingPlatform.Models
         public string? RazorpayOrderId { get; set; }
         public string? RazorpayPaymentId { get; set; }
         public string? PaymentGatewayResponse { get; set; } // optional raw response
+        public DeliveryDetails? deliveryDetails { get; set; } = new DeliveryDetails();
+
 
     }
 

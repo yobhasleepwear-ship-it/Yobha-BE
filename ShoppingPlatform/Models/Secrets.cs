@@ -12,6 +12,8 @@ namespace ShoppingPlatform.Models
         public string? AddedFor { get; set; }
         public RazorPaySecrets? razorPaySecrets { get; set; }
         public string? SMSAPIKEY { get; set; }
+        public string? DelhiveryApiToken { get; set; }
+        public string? DelhiveryPickupLocation { get; set; }
     }
 
     public class RazorPaySecrets

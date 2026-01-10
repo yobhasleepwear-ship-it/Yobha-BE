@@ -146,6 +146,7 @@ builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<IReturnRepository, ReturnRepository>();
 builder.Services.AddScoped<ISmsGatewayService, SmsGatewayService>();
 builder.Services.AddScoped<ILoyaltyPointAuditService, LoyaltyPointAuditService>();
+builder.Services.AddScoped<IDeliveryService, DelhiveryDeliveryService>();
 
 
 

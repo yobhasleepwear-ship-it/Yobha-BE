@@ -27,5 +27,8 @@ namespace ShoppingPlatform.Repositories
         /// </summary>
         Task<BuybackRequest> AdminApproveOrUpdateBuybackAsync(AdminUpdateBuybackRequest request);
         Task<object> InitiateBuybackPaymentAsync(string buybackId, string userId);
+        Task<bool> UpdateDeliveryDetailsAsync(
+    string referenceId,
+    DeliveryDetails request);
     }
 }
