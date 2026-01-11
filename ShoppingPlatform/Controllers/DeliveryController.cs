@@ -16,100 +16,145 @@ namespace ShoppingPlatform.Controllers
         private readonly IBuybackService _buybackRepo;
         private readonly IReturnRepository _returnRepo;
         private readonly ISecretsRepository _secretsRepo;
+        private readonly ILogger<DeliveryController> _logger;
 
-        public DeliveryController(IDeliveryService deliveryService, IOrderRepository orderRepository, IBuybackService buybackRepo, IReturnRepository returnRepo, ISecretsRepository secretsRepo)
+        public DeliveryController(IDeliveryService deliveryService, IOrderRepository orderRepository, IBuybackService buybackRepo, IReturnRepository returnRepo, ISecretsRepository secretsRepo, ILogger<DeliveryController> logger)
         {
             _deliveryService = deliveryService;
             _orderRepo = orderRepository;
             _buybackRepo = buybackRepo;
             _returnRepo = returnRepo;
             _secretsRepo = secretsRepo;
+            _logger = logger;
         }
 
         [HttpPost("create-shipment")]
-        public async Task<IActionResult> CreateShipment(
-    [FromBody] DeliveryRequest request)
+        public async Task<IActionResult> CreateShipment([FromBody] DeliveryRequest request)
         {
+            _logger.LogInformation("CreateShipment called with payload: {@Request}", request);
+
             if (string.IsNullOrWhiteSpace(request.OrderId))
-                return BadRequest("OrderId is required");
-
-            string awb;
-            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("DELHIVERY");
-
-            // 🌍 INTERNATIONAL
-            if (request.IsInternational)
             {
-                awb = await _deliveryService.CreateInternationalShipmentAsync(
-                    new InternationalDeliveryRequest
+                _logger.LogWarning("OrderId missing in CreateShipment request");
+                return BadRequest("OrderId is required");
+            }
+
+            try
+            {
+                _logger.LogInformation(
+                    "Shipment type decision | IsInternational: {IsInternational}, ReferenceType: {ReferenceType}",
+                    request.IsInternational,
+                    request.ReferenceType
+                );
+
+                // 🔐 Fetch secrets
+                var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("DELHIVERY");
+
+                if (secretsDoc == null)
+                {
+                    _logger.LogError("Delhivery secrets not found in DB");
+                    return StatusCode(500, "Delhivery secrets not configured");
+                }
+
+                string awb;
+
+                // 🌍 INTERNATIONAL
+                if (request.IsInternational)
+                {
+                    _logger.LogInformation("Creating INTERNATIONAL shipment for OrderId {OrderId}", request.OrderId);
+
+                    awb = await _deliveryService.CreateInternationalShipmentAsync(
+                        new InternationalDeliveryRequest
+                        {
+                            OrderId = request.OrderId,
+                            CountryCode = request.CountryCode,
+                            Name = request.DropName,
+                            Address = request.DropAddress,
+                            Weight = request.Weight,
+                            Value = request.DeclaredValue,
+                            Currency = request.Currency,
+                            Commodity = request.Commodity
+                        });
+                }
+                else
+                {
+                    bool isReverse =
+                        request.ReferenceType == "Return" ||
+                        request.ReferenceType == "Buyback";
+
+                    _logger.LogInformation(
+                        "Creating DOMESTIC shipment | IsReverse: {IsReverse}",
+                        isReverse
+                    );
+
+                    var domesticRequest = new DomesticShipmentRequest
                     {
                         OrderId = request.OrderId,
-                        CountryCode = request.CountryCode,
-                        Name = request.DropName,
-                        Address = request.DropAddress,
+                        IsReverse = isReverse,
+
+                        PickupName = request.PickupName,
+                        PickupPhone = request.PickupPhone,
+                        PickupAddress = request.PickupAddress,
+                        PickupPincode = request.PickupPincode,
+
+                        DropName = request.DropName,
+                        DropPhone = request.DropPhone,
+                        DropAddress = request.DropAddress,
+                        DropPincode = request.DropPincode,
+
                         Weight = request.Weight,
-                        Value = request.DeclaredValue,
-                        Currency = request.Currency,
-                        Commodity = request.Commodity
-                    });
-            }
-            // 🇮🇳 DOMESTIC (FORWARD + REVERSE)
-            else
-            {
-                bool isReverse =
-                    request.ReferenceType == "Return" ||
-                    request.ReferenceType == "Buyback";
+                        IsCod = request.IsCod,
+                        CodAmount = request.IsCod ? request.CodAmount : 0
+                    };
 
-                var domesticRequest = new DomesticShipmentRequest
+                    _logger.LogDebug("Domestic shipment payload: {@DomesticRequest}", domesticRequest);
+
+                    awb = await _deliveryService.CreateDomesticShipmentAsync(domesticRequest);
+                }
+
+                _logger.LogInformation("Shipment created successfully. AWB: {Awb}", awb);
+
+                var deliveryDetails = new DeliveryDetails
                 {
-                    OrderId = request.OrderId,
-                    IsReverse = isReverse,
-
-                    // Pickup
-                    PickupName = request.PickupName,
-                    PickupPhone = request.PickupPhone,
-                    PickupAddress = request.PickupAddress,
-                    PickupPincode = request.PickupPincode,
-
-                    // Drop
-                    DropName = request.DropName,
-                    DropPhone = request.DropPhone,
-                    DropAddress = request.DropAddress,
-                    DropPincode = request.DropPincode,
-
-                    Weight = request.Weight,
+                    Awb = awb,
+                    Courier = "DELHIVERY",
+                    Status = "READY_TO_SHIP",
+                    Type = request.IsInternational
+                        ? "International"
+                        : (request.ReferenceType == "Order" ? "Forward" : "Reverse"),
                     IsCod = request.IsCod,
-                    CodAmount = request.IsCod ? request.CodAmount : 0
+                    CodAmount = request.IsCod ? request.CodAmount : 0,
+                    IsInternational = request.IsInternational,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
                 };
 
-                awb = await _deliveryService.CreateDomesticShipmentAsync(domesticRequest);
+                _logger.LogInformation("Saving delivery details for OrderId {OrderId}", request.OrderId);
+
+                await UpdateShipmentAsync(
+                    request.OrderId,
+                    request.ReferenceType,
+                    deliveryDetails);
+
+                _logger.LogInformation("Delivery details saved successfully for AWB {Awb}", awb);
+
+                return Ok(deliveryDetails);
             }
-
-            // ✅ Build DeliveryDetails (THIS is what you wanted)
-            var deliveryDetails = new DeliveryDetails
+            catch (Exception ex)
             {
-                Awb = awb,
-                Courier = "DELHIVERY",
+                _logger.LogError(
+                    ex,
+                    "CreateShipment failed for OrderId {OrderId}. Error: {Message}",
+                    request.OrderId,
+                    ex.Message
+                );
 
-                Status = "READY_TO_SHIP",
-
-                Type = request.ReferenceType ,
-
-                IsCod = request.IsCod,
-                CodAmount = request.IsCod ? request.CodAmount : 0,
-
-                IsInternational = request.IsInternational,
-
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            // ✅ Pass DeliveryDetails (NOT DeliveryRequest)
-            var success = await UpdateShipmentAsync(
-                request.OrderId,
-                request.ReferenceType,
-                deliveryDetails);
-
-            return Ok(deliveryDetails);
+                return StatusCode(500, new
+                {
+                    message = "Create shipment failed",
+                    error = ex.Message
+                });
+            }
         }
 
 

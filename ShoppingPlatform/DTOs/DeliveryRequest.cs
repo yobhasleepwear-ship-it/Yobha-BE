@@ -24,10 +24,10 @@
 
         // International
         public bool IsInternational { get; set; }
-        public string CountryCode { get; set; }
-        public string Commodity { get; set; }
+        public string? CountryCode { get; set; }
+        public string? Commodity { get; set; }
         public decimal DeclaredValue { get; set; }
-        public string Currency { get; set; }
+        public string? Currency { get; set; }
     }
 
 
