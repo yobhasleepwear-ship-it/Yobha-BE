@@ -82,8 +82,6 @@ namespace ShoppingPlatform.Services
 
             var payload = new
             {
-                format = "json",
-
                 order_id = request.OrderId,
                 destination_country = request.CountryCode,
                 commodity = request.Commodity,
@@ -100,47 +98,46 @@ namespace ShoppingPlatform.Services
                 }
             };
 
-            _logger.LogDebug("Delhivery INTL payload: {Payload}",
-                JsonConvert.SerializeObject(payload));
+            _logger.LogDebug(
+                "Delhivery INTL JSON payload: {Payload}",
+                JsonConvert.SerializeObject(payload)
+            );
 
-            var responseBody = await PostAsync("/api/international/create", payload);
+            string url = "https://track.delhivery.com/api/international/create";
 
-            _logger.LogDebug("Delhivery INTL response: {Response}", responseBody);
+            var content = new StringContent(
+                JsonConvert.SerializeObject(payload),
+                Encoding.UTF8,
+                "application/json"
+            );
+
+            var response = await _httpClient.PostAsync(url, content);
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            _logger.LogDebug(
+                "Delhivery INTL response | Status={Status} | Body={Body}",
+                response.StatusCode,
+                responseBody
+            );
+
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"International shipment failed: {responseBody}");
 
             var parsed = JsonConvert.DeserializeObject<dynamic>(responseBody);
 
             if (parsed?.success != true)
-            {
-                _logger.LogError("International shipment failed: {Response}", responseBody);
                 throw new Exception($"International shipment failed: {responseBody}");
-            }
-
-            _logger.LogInformation(
-                "International shipment created successfully. AWB={Awb}",
-                responseBody
-            );
 
             return parsed.awb;
         }
+
 
         // 🇮🇳 DOMESTIC (FORWARD + REVERSE)
         public async Task<string> CreateDomesticShipmentAsync(DomesticShipmentRequest request)
         {
             await EnsureSecretsLoadedAsync();
 
-            _logger.LogInformation(
-                "Creating DOMESTIC shipment | OrderId={OrderId}, IsReverse={IsReverse}",
-                request.OrderId,
-                request.IsReverse
-            );
-
-            var payload = new
-            {
-                format = "json",
-
-                shipments = new[]
-                {
-            new
+            var shipment = new
             {
                 order = request.OrderId,
                 is_reverse = request.IsReverse,
@@ -159,39 +156,23 @@ namespace ShoppingPlatform.Services
                 cod_amount = request.IsCod ? request.CodAmount : 0,
 
                 weight = request.Weight
-            }
-        },
-                pickup_location = new
-                {
-                    name = _pickupLocation
-                }
             };
 
-            _logger.LogDebug(
-                "Delhivery DOMESTIC payload: {Payload}",
-                JsonConvert.SerializeObject(payload)
-            );
+            var formData = new Dictionary<string, string>
+    {
+        { "format", "json" }, // 🔥 THIS IS WHAT DELHIVERY READS
+        { "shipments", JsonConvert.SerializeObject(new[] { shipment }) },
+        { "pickup_location", JsonConvert.SerializeObject(new { name = _pickupLocation }) }
+    };
 
-            var responseBody = await PostAsync("/api/cmu/create.json", payload);
-
-            _logger.LogDebug("Delhivery DOMESTIC response: {Response}", responseBody);
+            var responseBody = await PostFormAsync("/api/cmu/create.json", formData);
 
             var parsed = JsonConvert.DeserializeObject<dynamic>(responseBody);
 
             if (parsed?.success != true)
-            {
-                _logger.LogError("Domestic shipment failed: {Response}", responseBody);
                 throw new Exception($"Domestic shipment failed: {responseBody}");
-            }
 
-            var awb = parsed.packages[0].waybill;
-
-            _logger.LogInformation(
-                "Domestic shipment created successfully. AWB={Awb}",
-                responseBody
-            );
-
-            return awb;
+            return parsed.packages[0].waybill;
         }
 
         // 📦 TRACKING
@@ -211,49 +192,58 @@ namespace ShoppingPlatform.Services
         {
             await EnsureSecretsLoadedAsync();
 
-            var payload = new { waybill = awb, cancellation = "true" };
-            await PostAsync("/api/p/edit", payload);
-        }
+            _logger.LogInformation("Cancelling shipment | AWB={Awb}", awb);
 
-        // 🔧 COMMON POST HANDLER
-        private async Task<string> PostAsync(string url, object payload)
-        {
-            // 🔥 FORCE format=json for Delhivery CMU APIs
-            if (url.Contains("/api/cmu/") && !url.Contains("format=json"))
-            {
-                url += url.Contains("?") ? "&format=json" : "?format=json";
-            }
+            var formData = new Dictionary<string, string>
+    {
+        { "waybill", awb },
+        { "cancellation", "true" }
+    };
 
-            string APIurl = "https://track.delhivery.com" + url;
+            string url = "https://track.delhivery.com/api/p/edit";
 
-            _logger.LogInformation("Calling Delhivery API: {Url}", APIurl);
+            _logger.LogDebug(
+                "Delhivery CANCEL FORM payload: {@Payload}",
+                formData
+            );
 
-            var json = JsonConvert.SerializeObject(payload);
+            var content = new FormUrlEncodedContent(formData);
 
-            _logger.LogTrace("Delhivery Request Body: {Json}", json);
-
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.PostAsync(APIurl, content);
+            var response = await _httpClient.PostAsync(url, content);
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            _logger.LogTrace(
-                "Delhivery Response Status={StatusCode}, Body={Body}",
+            _logger.LogDebug(
+                "Delhivery CANCEL response | Status={Status} | Body={Body}",
                 response.StatusCode,
                 responseBody
             );
 
             if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogError(
-                    "Delhivery API error | Url={Url} | Status={Status} | Body={Body}",
-                    APIurl,
-                    response.StatusCode,
-                    responseBody
-                );
+                throw new Exception($"Cancel shipment failed: {responseBody}");
+        }
 
+
+        // 🔧 COMMON POST HANDLER
+        private async Task<string> PostFormAsync(string url, Dictionary<string, string> formData)
+        {
+            string APIurl = "https://track.delhivery.com" + url;
+
+            _logger.LogInformation("Calling Delhivery FORM API: {Url}", APIurl);
+            _logger.LogDebug("Delhivery FORM Payload: {@Payload}", formData);
+
+            var content = new FormUrlEncodedContent(formData);
+
+            var response = await _httpClient.PostAsync(APIurl, content);
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            _logger.LogDebug(
+                "Delhivery FORM Response | Status={Status} | Body={Body}",
+                response.StatusCode,
+                responseBody
+            );
+
+            if (!response.IsSuccessStatusCode)
                 throw new Exception($"Delhivery API error: {responseBody}");
-            }
 
             return responseBody;
         }
@@ -265,24 +255,39 @@ namespace ShoppingPlatform.Services
 
             _logger.LogInformation("Scheduling pickup for AWB={Awb}", awb);
 
-            var payload = new
-            {
-                waybill = awb,
-                pickup_date = DateTime.UtcNow.ToString("yyyy-MM-dd")
-            };
+            var formData = new Dictionary<string, string>
+    {
+        { "waybill", awb },
+        { "pickup_date", DateTime.UtcNow.ToString("yyyy-MM-dd") }
+    };
 
             _logger.LogDebug(
-                "Delhivery pickup payload: {Payload}",
-                JsonConvert.SerializeObject(payload)
+                "Delhivery PICKUP FORM payload: {@Payload}",
+                formData
             );
 
-            var responseBody = await PostAsync("/api/p/pickup", payload);
+            string url = "https://track.delhivery.com/api/p/pickup";
+
+            var content = new FormUrlEncodedContent(formData);
+
+            var response = await _httpClient.PostAsync(url, content);
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            _logger.LogDebug(
+                "Delhivery PICKUP response | Status={Status} | Body={Body}",
+                response.StatusCode,
+                responseBody
+            );
+
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"Pickup scheduling failed: {responseBody}");
 
             _logger.LogInformation(
                 "Pickup scheduled successfully for AWB={Awb}",
                 awb
             );
         }
+
 
 
     }
