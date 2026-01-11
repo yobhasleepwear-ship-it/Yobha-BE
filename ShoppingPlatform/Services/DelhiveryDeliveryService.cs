@@ -82,6 +82,8 @@ namespace ShoppingPlatform.Services
 
             var payload = new
             {
+                format = "json",
+
                 order_id = request.OrderId,
                 destination_country = request.CountryCode,
                 commodity = request.Commodity,
