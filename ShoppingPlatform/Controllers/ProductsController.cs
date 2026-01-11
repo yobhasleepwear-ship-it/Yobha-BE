@@ -24,12 +24,13 @@ namespace ShoppingPlatform.Controllers
         private readonly IProductRepository _repo;
         private readonly IS3Service _s3;
         private readonly AwsS3Settings _aws;
-
-        public ProductsController(IProductRepository repo, IS3Service s3, IOptions<AwsS3Settings> awsOptions)
+        private readonly ILogger<ProductsController> _logger;
+        public ProductsController(IProductRepository repo, IS3Service s3, IOptions<AwsS3Settings> awsOptions, ILogger<ProductsController> logger)
         {
             _repo = repo;
             _s3 = s3;
             _aws = awsOptions.Value;
+            _logger = logger;
         }
 
         // -------------------------------------------
@@ -300,49 +301,63 @@ namespace ShoppingPlatform.Controllers
             if (file == null || file.Length == 0)
                 return BadRequest("Excel file required");
 
-            var products = new List<Product>();
-            var errors = new List<object>();
-
-            using var stream = new MemoryStream();
-            await file.CopyToAsync(stream);
-
-            using var workbook = new XLWorkbook(stream);
-            var sheet = workbook.Worksheet("Products");
-            var rows = sheet.RowsUsed().Skip(1);
-
-            int rowNumber = 1;
-
-            foreach (var row in rows)
+            try
             {
-                rowNumber++;
+                var products = new List<Product>();
+                var errors = new List<object>();
 
-                try
+                using var stream = new MemoryStream();
+                await file.CopyToAsync(stream);
+                stream.Position = 0; // ✅ VERY IMPORTANT
+
+                using var workbook = new XLWorkbook(stream);
+
+                if (!workbook.Worksheets.Any(w => w.Name == "Products"))
+                    return BadRequest("Excel must contain a sheet named 'Products'");
+
+                var sheet = workbook.Worksheet("Products");
+                var rows = sheet.RowsUsed().Skip(1);
+
+                int rowNumber = 1;
+
+                foreach (var row in rows)
                 {
-                    var product = BuildProduct(row);
-                    products.Add(product);
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(new
+                    rowNumber++;
+
+                    try
                     {
-                        Row = rowNumber,
-                        ProductId = row.Cell(1).GetString(),
-                        Error = ex.Message
-                    });
+                        var product = BuildProduct(row);
+                        products.Add(product);
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add(new
+                        {
+                            Row = rowNumber,
+                            ProductId = row.Cell("A").GetString(),
+                            Error = ex.Message
+                        });
+                    }
                 }
+
+                if (products.Any())
+                    await _repo.InsertManyAsync(products);
+
+                return Ok(new
+                {
+                    Total = products.Count + errors.Count,
+                    Inserted = products.Count,
+                    Failed = errors.Count,
+                    Errors = errors
+                });
             }
-
-            if (products.Any())
-                await _repo.InsertManyAsync(products);
-
-            return Ok(new
+            catch (Exception ex)
             {
-                Total = products.Count + errors.Count,
-                Inserted = products.Count,
-                Failed = errors.Count,
-                Errors = errors
-            });
+                _logger.LogError(ex, "Bulk upload failed");
+                return StatusCode(500, "Bulk upload failed: " + ex.Message);
+            }
         }
+
 
         private Product BuildProduct(IXLRow row)
         {
