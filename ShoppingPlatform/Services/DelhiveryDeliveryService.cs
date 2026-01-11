@@ -138,6 +138,7 @@ namespace ShoppingPlatform.Services
                 {
             new
             {
+                 format = "json",
                 order = request.OrderId,
                 is_reverse = request.IsReverse,
 
