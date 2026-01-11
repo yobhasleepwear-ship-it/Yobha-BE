@@ -320,23 +320,21 @@ namespace ShoppingPlatform.Controllers
 
                 int rowNumber = 1;
 
-                // ✅ Collect all ProductIds from Excel
-                var excelProductIds = rows
-                    .Select(r => GetStringSafe(r.Cell("A")))
-                    .Where(x => !string.IsNullOrWhiteSpace(x))
-                    .ToList();
+                // ✅ collect productIds from excel
+                var excelIds = rows.Select(r => GetStringSafe(r.Cell("A")))
+                                   .Where(x => !string.IsNullOrWhiteSpace(x))
+                                   .ToList();
 
-                // ✅ Detect duplicates inside Excel
-                var duplicateExcelIds = excelProductIds
-                    .GroupBy(x => x)
-                    .Where(g => g.Count() > 1)
-                    .Select(g => g.Key)
-                    .ToHashSet();
+                // ✅ duplicates inside excel
+                var duplicateExcelIds = excelIds.GroupBy(x => x)
+                                                 .Where(g => g.Count() > 1)
+                                                 .Select(g => g.Key)
+                                                 .ToHashSet();
 
-                // ✅ Fetch existing ProductIds from DB
-                var existingIds = (await _repo.GetByProductIdsAsync(excelProductIds))
-                                    .Select(x => x.ProductId)
-                                    .ToHashSet();
+                // ✅ existing in DB
+                var existingIds = (await _repo.GetByProductIdsAsync(excelIds))
+                                  .Select(x => x.ProductId)
+                                  .ToHashSet();
 
                 foreach (var row in rows)
                 {
@@ -353,9 +351,13 @@ namespace ShoppingPlatform.Controllers
                             throw new Exception("Duplicate ProductId found in Excel");
 
                         if (existingIds.Contains(productId))
-                            throw new Exception("ProductId already exists in database");
+                            throw new Exception($"{productId} already exists in database");
 
                         var product = BuildProduct(row);
+
+                        // ✅ Compute derived fields
+                        ComputePricing(product);
+                        product.Stock = product.Inventory.Sum(x => x.Quantity);
 
                         // ✅ Backend owned fields
                         product.CreatedAt = DateTime.UtcNow;
@@ -397,6 +399,7 @@ namespace ShoppingPlatform.Controllers
                 return StatusCode(500, "Bulk upload failed: " + ex.Message);
             }
         }
+
 
 
 
@@ -471,7 +474,7 @@ namespace ShoppingPlatform.Controllers
             {
                 var x = p.Split(':');
                 if (x.Length != 4)
-                    throw new Exception("PriceList format must be Size:Country:Price:Currency");
+                    throw new Exception("PriceList must be Size:Country:Price:Currency");
 
                 return new Price
                 {
@@ -479,7 +482,7 @@ namespace ShoppingPlatform.Controllers
                     Country = x[1],
                     PriceAmount = GetDecimalSafe(x[2]),
                     Currency = x[3],
-                    Quantity = 1 // ✅ DB aligned
+                    Quantity = 1
                 };
             }).ToList();
         }
@@ -503,20 +506,39 @@ namespace ShoppingPlatform.Controllers
 
         List<SpecificationField> ParseExtraSpecs(string value)
         {
-            return SplitList(value).Select(e =>
-            {
-                var x = e.Split(':');
-                if (x.Length != 2)
-                    throw new Exception("Extra specs format must be Key:Value");
+            var result = new List<SpecificationField>();
 
-                return new SpecificationField
+            foreach (var e in SplitList(value))
+            {
+                if (!e.Contains(":")) continue;
+
+                var x = e.Split(':', 2);
+
+                result.Add(new SpecificationField
                 {
-                    Key = x[0],
-                    Value = x[1]
-                };
-            }).ToList();
+                    Key = x[0].Trim(),
+                    Value = x[1].Trim()
+                });
+            }
+
+            return result;
         }
 
+        void ComputePricing(Product product)
+        {
+            if (!product.PriceList.Any())
+                throw new Exception("At least one price is required");
+
+            var inrPrices = product.PriceList.Where(x => x.Country == "IN").ToList();
+            var basePrices = inrPrices.Any() ? inrPrices : product.PriceList;
+
+            var min = basePrices.Min(x => x.PriceAmount);
+            var max = basePrices.Max(x => x.PriceAmount);
+
+            product.Price = min;
+            product.CompareAtPrice = max > min ? max : null;
+            product.DiscountPercent = max > min ? (int)Math.Round((max - min) / max * 100) : 0;
+        }
 
 
 
