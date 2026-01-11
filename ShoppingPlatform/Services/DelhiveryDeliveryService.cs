@@ -224,33 +224,34 @@ namespace ShoppingPlatform.Services
                 url += url.Contains("?") ? "&format=json" : "?format=json";
             }
 
-            _logger.LogInformation(
-                "Delhivery FULL URL = {BaseAddress}{Url}",
-                _httpClient.BaseAddress,
-                url
-            );
+            string APIurl = "https://track.delhivery.com" + url;
+
+            _logger.LogInformation("Calling Delhivery API: {Url}", APIurl);
 
             var json = JsonConvert.SerializeObject(payload);
 
-            _logger.LogDebug("Delhivery Request Body: {Json}", json);
+            _logger.LogTrace("Delhivery Request Body: {Json}", json);
 
-            var content = new StringContent(
-                json,
-                Encoding.UTF8,
-                "application/json"
-            );
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.PostAsync(url, content);
+            var response = await _httpClient.PostAsync(APIurl, content);
             var responseBody = await response.Content.ReadAsStringAsync();
 
-            _logger.LogDebug(
-                "Delhivery Response | Status={Status} | Body={Body}",
+            _logger.LogTrace(
+                "Delhivery Response Status={StatusCode}, Body={Body}",
                 response.StatusCode,
                 responseBody
             );
 
             if (!response.IsSuccessStatusCode)
             {
+                _logger.LogError(
+                    "Delhivery API error | Url={Url} | Status={Status} | Body={Body}",
+                    APIurl,
+                    response.StatusCode,
+                    responseBody
+                );
+
                 throw new Exception($"Delhivery API error: {responseBody}");
             }
 
