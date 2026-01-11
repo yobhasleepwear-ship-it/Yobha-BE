@@ -214,6 +214,7 @@ namespace ShoppingPlatform.Services
         // 🔧 COMMON POST HANDLER
         private async Task<string> PostAsync(string url, object payload)
         {
+            string APIurl = "https://track.delhivery.com"+ url;
             _logger.LogInformation("Calling Delhivery API: {Url}", url);
 
             var json = JsonConvert.SerializeObject(payload);
@@ -222,7 +223,7 @@ namespace ShoppingPlatform.Services
 
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.PostAsync(url, content);
+            var response = await _httpClient.PostAsync(APIurl, content);
             var responseBody = await response.Content.ReadAsStringAsync();
 
             _logger.LogTrace("Delhivery Response Status={StatusCode}, Body={Body}",
@@ -232,8 +233,8 @@ namespace ShoppingPlatform.Services
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogError(
-                    "Delhivery API error | Url={Url} | Status={Status} | Body={Body}",
-                    url,
+                    "Delhivery API error | Url={APIurl} | Status={Status} | Body={Body}",
+                    APIurl,
                     response.StatusCode,
                     responseBody
                 );
