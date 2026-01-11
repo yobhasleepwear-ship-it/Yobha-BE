@@ -15,6 +15,7 @@ namespace ShoppingPlatform.Repositories
 
         // New: lookup by readable PID (e.g., PID2138282)
         Task<Product?> GetByProductIdAsync(string productId);
+        Task<List<Product>> GetByProductIdsAsync(List<string> productIds);
 
         // New: check if readable PID exists
         Task<bool> ExistsByProductIdAsync(string productId);

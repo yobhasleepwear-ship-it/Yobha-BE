@@ -308,7 +308,7 @@ namespace ShoppingPlatform.Controllers
 
                 using var stream = new MemoryStream();
                 await file.CopyToAsync(stream);
-                stream.Position = 0; // ✅ VERY IMPORTANT
+                stream.Position = 0;
 
                 using var workbook = new XLWorkbook(stream);
 
@@ -316,9 +316,27 @@ namespace ShoppingPlatform.Controllers
                     return BadRequest("Excel must contain a sheet named 'Products'");
 
                 var sheet = workbook.Worksheet("Products");
-                var rows = sheet.RowsUsed().Skip(1);
+                var rows = sheet.RowsUsed().Skip(1).ToList();
 
                 int rowNumber = 1;
+
+                // ✅ Collect all ProductIds from Excel
+                var excelProductIds = rows
+                    .Select(r => GetStringSafe(r.Cell("A")))
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                // ✅ Detect duplicates inside Excel
+                var duplicateExcelIds = excelProductIds
+                    .GroupBy(x => x)
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key)
+                    .ToHashSet();
+
+                // ✅ Fetch existing ProductIds from DB
+                var existingIds = (await _repo.GetByProductIdsAsync(excelProductIds))
+                                    .Select(x => x.ProductId)
+                                    .ToHashSet();
 
                 foreach (var row in rows)
                 {
@@ -326,7 +344,29 @@ namespace ShoppingPlatform.Controllers
 
                     try
                     {
+                        var productId = GetStringSafe(row.Cell("A"));
+
+                        if (string.IsNullOrWhiteSpace(productId))
+                            throw new Exception("ProductId is required");
+
+                        if (duplicateExcelIds.Contains(productId))
+                            throw new Exception("Duplicate ProductId found in Excel");
+
+                        if (existingIds.Contains(productId))
+                            throw new Exception("ProductId already exists in database");
+
                         var product = BuildProduct(row);
+
+                        // ✅ Backend owned fields
+                        product.CreatedAt = DateTime.UtcNow;
+                        product.UpdatedAt = DateTime.UtcNow;
+                        product.IsDeleted = false;
+                        product.SalesCount = 0;
+                        product.Views = 0;
+                        product.UnitsSold = 0;
+                        product.AverageRating = 0;
+                        product.ReviewCount = 0;
+
                         products.Add(product);
                     }
                     catch (Exception ex)
@@ -334,7 +374,7 @@ namespace ShoppingPlatform.Controllers
                         errors.Add(new
                         {
                             Row = rowNumber,
-                            ProductId = row.Cell("A").GetString(),
+                            ProductId = GetStringSafe(row.Cell("A")),
                             Error = ex.Message
                         });
                     }
@@ -357,6 +397,8 @@ namespace ShoppingPlatform.Controllers
                 return StatusCode(500, "Bulk upload failed: " + ex.Message);
             }
         }
+
+
 
 
         private Product BuildProduct(IXLRow row)
@@ -408,13 +450,20 @@ namespace ShoppingPlatform.Controllers
             };
         }
 
+
         List<string> SplitList(string value) =>
-    string.IsNullOrWhiteSpace(value)
-        ? new()
-        : value.Split('|').Select(x => x.Trim()).ToList();
+            string.IsNullOrWhiteSpace(value)
+                ? new()
+                : value.Split('|').Select(x => x.Trim()).Where(x => !string.IsNullOrWhiteSpace(x)).ToList();
 
         List<ProductImage> ParseImages(string value) =>
-            SplitList(value).Select(u => new ProductImage { Url = u }).ToList();
+            SplitList(value).Select(u => new ProductImage
+            {
+                Url = u,
+                ThumbnailUrl = u,
+                Alt = Path.GetFileName(u),
+                UploadedAt = DateTime.UtcNow
+            }).ToList();
 
         List<Price> ParsePriceList(string value)
         {
@@ -429,7 +478,8 @@ namespace ShoppingPlatform.Controllers
                     Size = x[0],
                     Country = x[1],
                     PriceAmount = GetDecimalSafe(x[2]),
-                    Currency = x[3]
+                    Currency = x[3],
+                    Quantity = 1 // ✅ DB aligned
                 };
             }).ToList();
         }
@@ -459,10 +509,14 @@ namespace ShoppingPlatform.Controllers
                 if (x.Length != 2)
                     throw new Exception("Extra specs format must be Key:Value");
 
-                return new SpecificationField { Key = x[0], Value = x[1] };
+                return new SpecificationField
+                {
+                    Key = x[0],
+                    Value = x[1]
+                };
             }).ToList();
         }
-   
+
 
 
 
@@ -476,7 +530,6 @@ namespace ShoppingPlatform.Controllers
             if (cell == null || cell.IsEmpty()) return false;
 
             var v = cell.GetValue<string>().Trim().ToLower();
-
             return v == "true" || v == "1" || v == "yes" || v == "y";
         }
 
@@ -492,6 +545,7 @@ namespace ShoppingPlatform.Controllers
 
             throw new Exception($"Invalid number format: {value}");
         }
+
 
         // -------------------------
         // Helper: ensure nested ids exist (PriceList, CountryPrices, Inventory, Variants, Spec extra, Reviews, Images)
