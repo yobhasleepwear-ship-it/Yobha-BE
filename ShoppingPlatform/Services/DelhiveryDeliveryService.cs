@@ -134,11 +134,12 @@ namespace ShoppingPlatform.Services
 
             var payload = new
             {
+                format = "json",
+
                 shipments = new[]
                 {
             new
             {
-                 format = "json",
                 order = request.OrderId,
                 is_reverse = request.IsReverse,
 
