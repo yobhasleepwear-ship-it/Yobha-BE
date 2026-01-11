@@ -294,6 +294,7 @@ namespace ShoppingPlatform.Controllers
         }
 
         [HttpPost("bulk-upload")]
+        [AllowAnonymous]
         public async Task<IActionResult> BulkUpload(IFormFile file)
         {
             if (file == null || file.Length == 0)
