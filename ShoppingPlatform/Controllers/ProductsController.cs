@@ -363,47 +363,47 @@ namespace ShoppingPlatform.Controllers
         {
             return new Product
             {
-                ProductId = row.Cell("A").GetString(),
-                Name = row.Cell("B").GetString(),
-                Slug = row.Cell("C").GetString(),
-                Description = row.Cell("D").GetString(),
+                ProductId = GetStringSafe(row.Cell("A")),
+                Name = GetStringSafe(row.Cell("B")),
+                Slug = GetStringSafe(row.Cell("C")),
+                Description = GetStringSafe(row.Cell("D")),
 
-                ProductMainCategory = row.Cell("E").GetString(),
-                ProductCategory = row.Cell("F").GetString(),
-                ProductSubCategory = row.Cell("G").GetString(),
+                ProductMainCategory = GetStringSafe(row.Cell("E")),
+                ProductCategory = GetStringSafe(row.Cell("F")),
+                ProductSubCategory = GetStringSafe(row.Cell("G")),
 
-                IsActive = row.Cell("H").GetBoolean(),
-                IsFeatured = row.Cell("I").GetBoolean(),
+                IsActive = GetBoolSafe(row.Cell("H")),
+                IsFeatured = GetBoolSafe(row.Cell("I")),
 
-                SizeOfProduct = SplitList(row.Cell("J").GetString()),
-                AvailableColors = SplitList(row.Cell("K").GetString()),
-                FabricType = SplitList(row.Cell("L").GetString()),
+                SizeOfProduct = SplitList(GetStringSafe(row.Cell("J"))),
+                AvailableColors = SplitList(GetStringSafe(row.Cell("K"))),
+                FabricType = SplitList(GetStringSafe(row.Cell("L"))),
 
-                Images = ParseImages(row.Cell("M").GetString()),
-                PriceList = ParsePriceList(row.Cell("N").GetString()),
-                CountryPrices = ParseCountryPrices(row.Cell("O").GetString()),
+                Images = ParseImages(GetStringSafe(row.Cell("M"))),
+                PriceList = ParsePriceList(GetStringSafe(row.Cell("N"))),
+                CountryPrices = ParseCountryPrices(GetStringSafe(row.Cell("O"))),
 
                 Specifications = new ProductSpecifications
                 {
-                    Fabric = row.Cell("P").GetString(),
-                    Length = row.Cell("Q").GetString(),
-                    Origin = row.Cell("R").GetString(),
-                    Fit = row.Cell("S").GetString(),
-                    Care = row.Cell("T").GetString(),
-                    Extra = ParseExtraSpecs(row.Cell("U").GetString())
+                    Fabric = GetStringSafe(row.Cell("P")),
+                    Length = GetStringSafe(row.Cell("Q")),
+                    Origin = GetStringSafe(row.Cell("R")),
+                    Fit = GetStringSafe(row.Cell("S")),
+                    Care = GetStringSafe(row.Cell("T")),
+                    Extra = ParseExtraSpecs(GetStringSafe(row.Cell("U")))
                 },
 
-                KeyFeatures = SplitList(row.Cell("V").GetString()),
-                CareInstructions = SplitList(row.Cell("W").GetString()),
+                KeyFeatures = SplitList(GetStringSafe(row.Cell("V"))),
+                CareInstructions = SplitList(GetStringSafe(row.Cell("W"))),
 
-                FreeDelivery = row.Cell("X").GetBoolean(),
-                ReturnPolicy = row.Cell("Y").GetString(),
+                FreeDelivery = GetBoolSafe(row.Cell("X")),
+                ReturnPolicy = GetStringSafe(row.Cell("Y")),
 
                 ShippingInfo = new ShippingInfo
                 {
-                    FreeShipping = row.Cell("Z").GetBoolean(),
-                    EstimatedDelivery = row.Cell("AA").GetString(),
-                    CashOnDelivery = row.Cell("AB").GetBoolean()
+                    FreeShipping = GetBoolSafe(row.Cell("Z")),
+                    EstimatedDelivery = GetStringSafe(row.Cell("AA")),
+                    CashOnDelivery = GetBoolSafe(row.Cell("AB"))
                 }
             };
         }
@@ -421,11 +421,14 @@ namespace ShoppingPlatform.Controllers
             return SplitList(value).Select(p =>
             {
                 var x = p.Split(':');
+                if (x.Length != 4)
+                    throw new Exception("PriceList format must be Size:Country:Price:Currency");
+
                 return new Price
                 {
                     Size = x[0],
                     Country = x[1],
-                    PriceAmount = decimal.Parse(x[2]),
+                    PriceAmount = GetDecimalSafe(x[2]),
                     Currency = x[3]
                 };
             }).ToList();
@@ -436,10 +439,13 @@ namespace ShoppingPlatform.Controllers
             return SplitList(value).Select(p =>
             {
                 var x = p.Split(':');
+                if (x.Length != 3)
+                    throw new Exception("CountryPrices format must be Country:Price:Currency");
+
                 return new CountryPrice
                 {
                     Country = x[0],
-                    PriceAmount = decimal.Parse(x[1]),
+                    PriceAmount = GetDecimalSafe(x[1]),
                     Currency = x[2]
                 };
             }).ToList();
@@ -450,10 +456,42 @@ namespace ShoppingPlatform.Controllers
             return SplitList(value).Select(e =>
             {
                 var x = e.Split(':');
+                if (x.Length != 2)
+                    throw new Exception("Extra specs format must be Key:Value");
+
                 return new SpecificationField { Key = x[0], Value = x[1] };
             }).ToList();
         }
+   
 
+
+
+        string GetStringSafe(IXLCell cell)
+        {
+            return cell?.GetValue<string>()?.Trim() ?? string.Empty;
+        }
+
+        bool GetBoolSafe(IXLCell cell)
+        {
+            if (cell == null || cell.IsEmpty()) return false;
+
+            var v = cell.GetValue<string>().Trim().ToLower();
+
+            return v == "true" || v == "1" || v == "yes" || v == "y";
+        }
+
+        decimal GetDecimalSafe(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                throw new Exception("Price value is empty");
+
+            value = value.Replace("₹", "").Replace("$", "").Trim();
+
+            if (decimal.TryParse(value, out var result))
+                return result;
+
+            throw new Exception($"Invalid number format: {value}");
+        }
 
         // -------------------------
         // Helper: ensure nested ids exist (PriceList, CountryPrices, Inventory, Variants, Spec extra, Reviews, Images)
