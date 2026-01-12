@@ -748,6 +748,41 @@ namespace ShoppingPlatform.Repositories
             return result.MatchedCount > 0;
         }
 
+        public async Task<bool> UpdateDeliveryStatusAsync(UpdateOrderStatusAdmin request)
+        {
+            var updates = new List<UpdateDefinition<Order>>();
+
+            // deliveryDetails updates (only if orderStatus present)
+            if (!string.IsNullOrWhiteSpace(request.orderStatus))
+            {
+                updates.Add(Builders<Order>.Update
+                    .Set(x => x.deliveryDetails.Status, request.orderStatus)
+                    .Set(x => x.deliveryDetails.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // payment status update (only if paymentStatus present)
+            if (!string.IsNullOrWhiteSpace(request.paymentStatus))
+            {
+                updates.Add(Builders<Order>.Update
+                    .Set(x => x.PaymentStatus, request.paymentStatus)
+                    .Set(x => x.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // nothing to update
+            if (!updates.Any())
+                return false;
+
+            var update = Builders<Order>.Update.Combine(updates);
+
+            var result = await _col.UpdateOneAsync(
+                x => x.Id == request.id,
+                update
+            );
+
+            return result.MatchedCount > 0;
+        }
+
+
         public async Task<Order?> GetByAwbAsync(string awb)
         {
             if (string.IsNullOrWhiteSpace(awb))

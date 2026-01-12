@@ -1,4 +1,5 @@
 ﻿using MongoDB.Driver;
+using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Models;
 
 namespace ShoppingPlatform.Repositories
@@ -127,6 +128,40 @@ namespace ShoppingPlatform.Repositories
             var result = await _collection.UpdateOneAsync(
                 x => x.Id == orderId,
                 update);
+
+            return result.MatchedCount > 0;
+        }
+
+        public async Task<bool> UpdateDeliveryStatusAsync(UpdateOrderStatusAdmin request)
+        {
+            var updates = new List<UpdateDefinition<ReturnOrder>>();
+
+            // deliveryDetails updates (only if orderStatus present)
+            if (!string.IsNullOrWhiteSpace(request.orderStatus))
+            {
+                updates.Add(Builders<ReturnOrder>.Update
+                    .Set(x => x.deliveryDetails.Status, request.orderStatus)
+                    .Set(x => x.deliveryDetails.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // payment status update (only if paymentStatus present)
+            if (!string.IsNullOrWhiteSpace(request.paymentStatus))
+            {
+                updates.Add(Builders<ReturnOrder>.Update
+                    .Set(x => x.RefundStatus, request.paymentStatus)
+                    .Set(x => x.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // nothing to update
+            if (!updates.Any())
+                return false;
+
+            var update = Builders<ReturnOrder>.Update.Combine(updates);
+
+            var result = await _collection.UpdateOneAsync(
+                x => x.Id == request.id,
+                update
+            );
 
             return result.MatchedCount > 0;
         }

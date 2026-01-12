@@ -1,4 +1,5 @@
-﻿using ShoppingPlatform.Models;
+﻿using ShoppingPlatform.DTOs;
+using ShoppingPlatform.Models;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -14,6 +15,8 @@ namespace ShoppingPlatform.Repositories
     string referenceId,
     DeliveryDetails request);
         Task<bool> UpdateDeliveryStatusAsync(string referenceId, string newStatus);
+        Task<bool> UpdateDeliveryStatusAsync(UpdateOrderStatusAdmin request);
+
         Task<ReturnOrder?> GetByAwbAsync(string awb);
     }
 }

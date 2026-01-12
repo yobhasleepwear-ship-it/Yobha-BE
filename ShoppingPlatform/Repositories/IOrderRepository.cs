@@ -31,6 +31,8 @@ namespace ShoppingPlatform.Repositories
             string referenceId,
             DeliveryDetails request);
         Task<bool> UpdateDeliveryStatusAsync(string referenceId, string newStatus);
+        Task<bool> UpdateDeliveryStatusAsync(UpdateOrderStatusAdmin request);
+
         Task<Order?> GetByAwbAsync(string awb);
     }
 }

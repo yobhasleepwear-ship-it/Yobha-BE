@@ -1,0 +1,10 @@
+﻿namespace ShoppingPlatform.DTOs
+{
+    public class UpdateOrderStatusAdmin
+    {
+        public string id { get; set; }
+        public string type { get; set; }
+        public string? orderStatus { get; set; }
+        public string? paymentStatus { get; set; }
+    }
+}

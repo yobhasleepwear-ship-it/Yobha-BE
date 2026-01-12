@@ -289,6 +289,39 @@ namespace ShoppingPlatform.Services
 
             return result.MatchedCount > 0;
         }
+        public async Task<bool> UpdateDeliveryStatusAsync(UpdateOrderStatusAdmin request)
+        {
+            var updates = new List<UpdateDefinition<BuybackRequest>>();
+
+            // deliveryDetails updates (only if orderStatus present)
+            if (!string.IsNullOrWhiteSpace(request.orderStatus))
+            {
+                updates.Add(Builders<BuybackRequest>.Update
+                    .Set(x => x.deliveryDetails.Status, request.orderStatus)
+                    .Set(x => x.deliveryDetails.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // payment status update (only if paymentStatus present)
+            if (!string.IsNullOrWhiteSpace(request.paymentStatus))
+            {
+                updates.Add(Builders<BuybackRequest>.Update
+                    .Set(x => x.PaymentStatus, request.paymentStatus)
+                    .Set(x => x.UpdatedAt, DateTime.UtcNow));
+            }
+
+            // nothing to update
+            if (!updates.Any())
+                return false;
+
+            var update = Builders<BuybackRequest>.Update.Combine(updates);
+
+            var result = await _buybackCollection.UpdateOneAsync(
+                x => x.Id == request.id,
+                update
+            );
+
+            return result.MatchedCount > 0;
+        }
 
         public async Task<BuybackRequest?> GetByAwbAsync(string awb)
         {
