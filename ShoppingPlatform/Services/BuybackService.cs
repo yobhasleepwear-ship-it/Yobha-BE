@@ -217,7 +217,7 @@ namespace ShoppingPlatform.Services
 
             // Create razorpay order
             // Use a deterministic order id for receipt/traceability
-            string receiptId = $"buyback_{existing.Id}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            string receiptId = $"buyback_{existing.Id}";
 
             var rpResult = await _paymentHelper.CreateRazorpayOrderAsync(receiptId, existing.Amount.Value, existing.Currency ?? "INR", isInternational: false);
             if (!rpResult.Success)
