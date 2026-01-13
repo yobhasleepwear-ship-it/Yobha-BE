@@ -194,10 +194,7 @@ namespace ShoppingPlatform.Services
             var filter = Builders<BuybackRequest>.Filter.Eq(b => b.Id, buybackId);
             var existing = await _buybackCollection.Find(filter).FirstOrDefaultAsync();
             if (existing == null)
-                throw new KeyNotFoundException("Buyback not found.");
-
-            if (existing.UserId != userId)
-                throw new InvalidOperationException("User is not owner of this buyback request.");
+                throw new KeyNotFoundException("Buyback not found.");   
 
             if (existing.RequestType?.Trim().ToLowerInvariant() != "repairreuse")
                 throw new InvalidOperationException("Payment only supported for RepairReuse requests.");
