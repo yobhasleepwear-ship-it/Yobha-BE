@@ -1,4 +1,6 @@
-﻿namespace ShoppingPlatform.DTOs
+﻿using Newtonsoft.Json;
+
+namespace ShoppingPlatform.DTOs
 {
     public class DeliveryRequest
     {
@@ -99,6 +101,51 @@
     {
         public string ReferenceId { get; set; }
         public string ReferenceType { get; set; } // Order / Buyback / Return
+    }
+
+
+
+
+    public class DelhiveryPincodeResponse
+    {
+        [JsonProperty("delivery_codes")]
+        public List<DeliveryCodeWrapper> DeliveryCodes { get; set; } = new();
+    }
+
+    public class DeliveryCodeWrapper
+    {
+        [JsonProperty("postal_code")]
+        public PostalCode PostalCode { get; set; } = new();
+    }
+
+    public class PostalCode
+    {
+        [JsonProperty("pin")]
+        public int Pin { get; set; }
+
+        [JsonProperty("city")]
+        public string City { get; set; } = string.Empty;
+
+        [JsonProperty("state_code")]
+        public string StateCode { get; set; } = string.Empty;
+
+        [JsonProperty("country_code")]
+        public string CountryCode { get; set; } = string.Empty;
+
+        [JsonProperty("cod")]
+        public string Cod { get; set; } = string.Empty;
+
+        [JsonProperty("pre_paid")]
+        public string PrePaid { get; set; } = string.Empty;
+
+        [JsonProperty("pickup")]
+        public string Pickup { get; set; } = string.Empty;
+
+        [JsonProperty("is_oda")]
+        public string IsOda { get; set; } = string.Empty;
+
+        [JsonProperty("sort_code")]
+        public string SortCode { get; set; } = string.Empty;
     }
 
 }

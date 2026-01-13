@@ -9,6 +9,7 @@ namespace ShoppingPlatform.Services
         Task CancelShipmentAsync(string awb);
         Task<string> CreateDomesticShipmentAsync(DomesticShipmentRequest request);
         Task SchedulePickupAsync(string awb);
+        Task<DelhiveryPincodeResponse> CheckPincodeServiceabilityAsync(string pincode);
 
     }
 

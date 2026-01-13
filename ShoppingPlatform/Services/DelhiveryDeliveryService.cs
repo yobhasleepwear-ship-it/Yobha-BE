@@ -241,11 +241,18 @@ namespace ShoppingPlatform.Services
         {
             await EnsureSecretsLoadedAsync();
 
-            var response = await _httpClient.GetAsync(
-                $"https://track.delhivery.com/api/v1/packages/json/?waybill={awb}");
+            var url =
+                $"https://track.delhivery.com/api/v1/packages/json/?waybill={awb}";
 
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadAsStringAsync();
+            using var request = CreateDelhiveryRequest(HttpMethod.Get, url);
+
+            var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"Tracking failed: {body}");
+
+            return body;
         }
 
         // ❌ CANCEL SHIPMENT
@@ -253,7 +260,7 @@ namespace ShoppingPlatform.Services
         {
             await EnsureSecretsLoadedAsync();
 
-            _logger.LogInformation("Cancelling shipment | AWB={Awb}", awb);
+            var url = "https://track.delhivery.com/api/p/edit";
 
             var formData = new Dictionary<string, string>
     {
@@ -261,40 +268,33 @@ namespace ShoppingPlatform.Services
         { "cancellation", "true" }
     };
 
-            string url = "https://track.delhivery.com/api/p/edit";
+            using var request = CreateDelhiveryRequest(HttpMethod.Post, url);
+            request.Content = new FormUrlEncodedContent(formData);
 
-            _logger.LogDebug(
-                "Delhivery CANCEL FORM payload: {@Payload}",
-                formData
-            );
-
-            var content = new FormUrlEncodedContent(formData);
-
-            var response = await _httpClient.PostAsync(url, content);
-            var responseBody = await response.Content.ReadAsStringAsync();
-
-            _logger.LogDebug(
-                "Delhivery CANCEL response | Status={Status} | Body={Body}",
-                response.StatusCode,
-                responseBody
-            );
+            var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
-                throw new Exception($"Cancel shipment failed: {responseBody}");
+                throw new Exception($"Cancel shipment failed: {body}");
         }
 
 
         // 🔧 COMMON POST HANDLER
-        private async Task<string> PostFormAsync(string url, Dictionary<string, string> formData)
+        private async Task<string> PostFormAsync(
+            string url,
+            Dictionary<string, string> formData)
         {
-            string APIurl = "https://track.delhivery.com" + url;
+            await EnsureSecretsLoadedAsync();
 
-            _logger.LogInformation("Calling Delhivery FORM API: {Url}", APIurl);
+            string apiUrl = "https://track.delhivery.com" + url;
+
+            _logger.LogInformation("Calling Delhivery FORM API: {Url}", apiUrl);
             _logger.LogDebug("Delhivery FORM Payload: {@Payload}", formData);
 
-            var content = new FormUrlEncodedContent(formData);
+            using var request = CreateDelhiveryRequest(HttpMethod.Post, apiUrl);
+            request.Content = new FormUrlEncodedContent(formData);
 
-            var response = await _httpClient.PostAsync(APIurl, content);
+            var response = await _httpClient.SendAsync(request);
             var responseBody = await response.Content.ReadAsStringAsync();
 
             _logger.LogDebug(
@@ -314,7 +314,7 @@ namespace ShoppingPlatform.Services
         {
             await EnsureSecretsLoadedAsync();
 
-            _logger.LogInformation("Scheduling pickup for AWB={Awb}", awb);
+            var url = "https://track.delhivery.com/api/p/pickup";
 
             var formData = new Dictionary<string, string>
     {
@@ -322,31 +322,64 @@ namespace ShoppingPlatform.Services
         { "pickup_date", DateTime.UtcNow.ToString("yyyy-MM-dd") }
     };
 
-            _logger.LogDebug(
-                "Delhivery PICKUP FORM payload: {@Payload}",
-                formData
+            using var request = CreateDelhiveryRequest(HttpMethod.Post, url);
+            request.Content = new FormUrlEncodedContent(formData);
+
+            var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"Pickup scheduling failed: {body}");
+        }
+
+        private HttpRequestMessage CreateDelhiveryRequest(
+    HttpMethod method,
+    string url)
+        {
+            var request = new HttpRequestMessage(method, url);
+
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue("Token", _apiToken);
+
+            request.Headers.Accept.Clear();
+            request.Headers.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json")
             );
 
-            string url = "https://track.delhivery.com/api/p/pickup";
+            return request;
+        }
 
-            var content = new FormUrlEncodedContent(formData);
 
-            var response = await _httpClient.PostAsync(url, content);
+        public async Task<DelhiveryPincodeResponse> CheckPincodeServiceabilityAsync(string pincode)
+        {
+            await EnsureSecretsLoadedAsync();
+
+            var url =
+                $"https://track.delhivery.com/c/api/pin-codes/json/?filter_codes={pincode}";
+
+            _logger.LogInformation(
+                "Checking Delhivery pincode serviceability | Pincode={Pincode}",
+                pincode
+            );
+
+            using var request = CreateDelhiveryRequest(HttpMethod.Get, url);
+
+            var response = await _httpClient.SendAsync(request);
             var responseBody = await response.Content.ReadAsStringAsync();
 
             _logger.LogDebug(
-                "Delhivery PICKUP response | Status={Status} | Body={Body}",
+                "Delhivery PINCODE response | Status={Status} | Body={Body}",
                 response.StatusCode,
                 responseBody
             );
 
             if (!response.IsSuccessStatusCode)
-                throw new Exception($"Pickup scheduling failed: {responseBody}");
+                throw new Exception($"Pincode check failed: {responseBody}");
 
-            _logger.LogInformation(
-                "Pickup scheduled successfully for AWB={Awb}",
-                awb
-            );
+            var parsed =
+                JsonConvert.DeserializeObject<DelhiveryPincodeResponse>(responseBody);
+
+            return parsed!;
         }
 
 

@@ -235,6 +235,54 @@ namespace ShoppingPlatform.Controllers
             });
         }
 
+        [HttpGet("pincode/{pincode}")]
+        public async Task<IActionResult> CheckPincode(string pincode)
+        {
+            if (string.IsNullOrWhiteSpace(pincode) || pincode.Length != 6)
+                return BadRequest("Invalid pincode");
+
+            try
+            {
+                var response =
+                    await _deliveryService.CheckPincodeServiceabilityAsync(pincode);
+
+                if (response == null || !response.DeliveryCodes.Any())
+                {
+                    return Ok(new
+                    {
+                        serviceable = false,
+                        message = "Pincode not serviceable"
+                    });
+                }
+
+                var postal = response.DeliveryCodes[0].PostalCode;
+
+                return Ok(new
+                {
+                    serviceable = true,
+                    pincode = postal.Pin,
+                    city = postal.City,
+                    state = postal.StateCode,
+                    country = postal.CountryCode,
+
+                    cod = postal.Cod == "Y",
+                    prepaid = postal.PrePaid == "Y",
+                    pickup = postal.Pickup == "Y",
+                    isOda = postal.IsOda == "Y",
+
+                    sortCode = postal.SortCode
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Pincode serviceability check failed");
+
+                return StatusCode(500, new
+                {
+                    message = "Failed to check pincode serviceability"
+                });
+            }
+        }
 
         private async Task<bool> UpdateShipmentAsync(
      string referenceId,
