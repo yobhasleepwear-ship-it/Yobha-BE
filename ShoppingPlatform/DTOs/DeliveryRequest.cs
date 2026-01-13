@@ -6,21 +6,26 @@
         public string ReferenceType { get; set; } // Order | Buyback | Return 
 
         // Pickup (source)
-        public string PickupName { get; set; }
-        public string PickupPhone { get; set; }
-        public string PickupAddress { get; set; }
-        public string PickupPincode { get; set; }
+        public string? PickupName { get; set; }
+        public string? PickupPhone { get; set; }
+        public string? PickupCity { get; set; }
+        public string? PickupState { get; set; }
+        public string? PickupAddress { get; set; }
+        public string? PickupPincode { get; set; }
 
         // Drop (destination)
-        public string DropName { get; set; }
-        public string DropPhone { get; set; }
-        public string DropAddress { get; set; }
-        public string DropPincode { get; set; }
+        public string? DropName { get; set; }
+        public string? DropPhone { get; set; }
+        public string? DropAddress { get; set; }
+        public string? DropPincode { get; set; }
+        public string? DropCity { get; set; }
+        public string? DropState { get; set; }
 
         public decimal Weight { get; set; }
 
         public bool IsCod { get; set; }
         public decimal CodAmount { get; set; }
+        public decimal Amount { get; set; }
 
         // International
         public bool IsInternational { get; set; }
@@ -41,6 +46,9 @@
         public string Currency { get; set; }
         public string Name { get; set; }
         public string Address { get; set; }
+        public string DropPhone { get; set; }
+
+        
     }
 
     public class ShipmentResult
@@ -58,12 +66,16 @@
         // Pickup
         public string PickupName { get; set; }
         public string PickupPhone { get; set; }
+        public string PickupCity { get; set; }
+        public string PickupState { get; set; }
         public string PickupAddress { get; set; }
         public string PickupPincode { get; set; }
 
         // Drop
         public string DropName { get; set; }
         public string DropPhone { get; set; }
+        public string DropCity { get; set; }
+        public string DropState { get; set; }
         public string DropAddress { get; set; }
         public string DropPincode { get; set; }
 
@@ -71,6 +83,8 @@
 
         public bool IsCod { get; set; }
         public decimal CodAmount { get; set; }
+        public decimal Amount { get; set; }
+
     }
 
     public class DeliveryStatusUpdateRequest

@@ -73,7 +73,8 @@ namespace ShoppingPlatform.Controllers
                             Weight = request.Weight,
                             Value = request.DeclaredValue,
                             Currency = request.Currency,
-                            Commodity = request.Commodity
+                            Commodity = request.Commodity,
+                            DropPhone = request.DropPhone
                         });
                 }
                 else
