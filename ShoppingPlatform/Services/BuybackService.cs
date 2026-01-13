@@ -196,7 +196,7 @@ namespace ShoppingPlatform.Services
             if (existing == null)
                 throw new KeyNotFoundException("Buyback not found.");   
 
-            if (existing.RequestType?.Trim().ToLowerInvariant() != "repairreuse")
+            if (existing.RequestType?.Trim() != "RepairReuse")
                 throw new InvalidOperationException("Payment only supported for RepairReuse requests.");
 
             if (existing.Amount == null || existing.Amount <= 0)
