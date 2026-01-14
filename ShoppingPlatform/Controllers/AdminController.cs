@@ -15,7 +15,6 @@ namespace ShoppingPlatform.Controllers
 {
     [ApiController]
     [Route("api/admin")]
-    [Authorize(Roles = "Admin")]
     public class AdminController : ControllerBase
     {
         private readonly IProductRepository _repo;
@@ -35,6 +34,7 @@ namespace ShoppingPlatform.Controllers
         }
 
         [HttpPost("MakeAdmin/{email}")]
+        [Authorize(Roles = "Admin")]
         public async Task<ActionResult<ApiResponse<object>>> MakeAdmin(string email, [FromServices] UserRepository users)
         {
             var user = await users.GetByEmailAsync(email);
@@ -53,6 +53,7 @@ namespace ShoppingPlatform.Controllers
         }
 
         [HttpPost("ChangeOrderStatus")]
+        [Authorize]
         public async Task<IActionResult> SchedulePickup(UpdateOrderStatusAdmin request)
         {
 
