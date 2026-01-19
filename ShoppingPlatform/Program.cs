@@ -44,7 +44,9 @@ builder.Services.AddCors(options =>
 
                 // Known test hosts
                 if (uri.Host.Equals("yobha-test-env.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
-                if (uri.Host.Equals("yobha.world", StringComparison.OrdinalIgnoreCase)) return true;
+                if (uri.Host.Contains("yobha.world", StringComparison.OrdinalIgnoreCase)) return true;
+                if (uri.Host.Equals("www.yobha.world", StringComparison.OrdinalIgnoreCase)) return true;
+
                 if (uri.Host.Equals("yobha-test-env-aef5.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
                 if (uri.Host.Equals("yobha-frontend-user-test.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
                 if (uri.Host.Equals("yobha-frontend-admin-test.vercel.app", StringComparison.OrdinalIgnoreCase)) return true;
