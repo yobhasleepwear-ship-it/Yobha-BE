@@ -143,7 +143,12 @@ namespace ShoppingPlatform.Repositories
                     .Set(x => x.deliveryDetails.Status, request.orderStatus)
                     .Set(x => x.deliveryDetails.UpdatedAt, DateTime.UtcNow));
             }
-
+            if (!string.IsNullOrWhiteSpace(request.orderStatus))
+            {
+                updates.Add(Builders<ReturnOrder>.Update
+                    .Set(x => x.Status, request.orderStatus)
+                    .Set(x => x.UpdatedAt, DateTime.UtcNow));
+            }
             // payment status update (only if paymentStatus present)
             if (!string.IsNullOrWhiteSpace(request.paymentStatus))
             {

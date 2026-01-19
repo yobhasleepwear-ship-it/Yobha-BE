@@ -98,7 +98,7 @@ namespace ShoppingPlatform.Controllers
         public async Task<ActionResult<ApiResponse<Order>>> Get(string id)
         {
             var order = await _orderRepo.GetByIdAsync(id);
-            if (order == null)
+            if (order == null || (order!=null && order.PaymentMethod== "razorpay" && string.IsNullOrEmpty(order.RazorpayOrderId)))
             {
                 var notFoundResponse = ApiResponse<Order>.Fail("Order not found", null, HttpStatusCode.NotFound);
                 return NotFound(notFoundResponse);
