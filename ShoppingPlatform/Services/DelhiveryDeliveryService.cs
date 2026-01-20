@@ -81,8 +81,8 @@ namespace ShoppingPlatform.Services
             await EnsureSecretsLoadedAsync();
 
             // INTERNAL reference only (NOT AWB)
-            var internalShipmentId = await GenerateInternalShipmentIdAsync();
-            request.OrderId = internalShipmentId;
+           // var internalShipmentId = await GenerateInternalShipmentIdAsync();
+           // request.OrderId = internalShipmentId;
 
             var formData = new Dictionary<string, string>
     {
