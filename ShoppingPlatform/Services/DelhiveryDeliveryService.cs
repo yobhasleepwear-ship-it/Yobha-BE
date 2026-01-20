@@ -97,7 +97,7 @@ namespace ShoppingPlatform.Services
 
                 consignee_name = request.Name,
                 consignee_address = request.Address,
-                consignee_phone = request.DropPhone,
+                phone = request.DropPhone,
 
                 destination_country = request.CountryCode,
                 commodity = request.Commodity,
