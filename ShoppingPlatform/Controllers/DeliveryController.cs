@@ -74,7 +74,8 @@ namespace ShoppingPlatform.Controllers
                             Value = request.DeclaredValue,
                             Currency = request.Currency,
                             Commodity = request.Commodity,
-                            DropPhone = request.DropPhone
+                            DropPhone = request.DropPhone,
+                            DropPinCode = request.DropPincode
                         });
                 }
                 else

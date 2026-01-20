@@ -49,7 +49,7 @@ namespace ShoppingPlatform.DTOs
         public string Name { get; set; }
         public string Address { get; set; }
         public string DropPhone { get; set; }
-
+        public string DropPinCode { get; set; }
         
     }
 

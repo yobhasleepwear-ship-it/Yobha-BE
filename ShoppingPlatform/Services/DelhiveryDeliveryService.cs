@@ -1,4 +1,5 @@
 ﻿using System.Net.Http.Headers;
+using System.Net.NetworkInformation;
 using System.Text;
 using MongoDB.Driver;
 using Newtonsoft.Json;
@@ -98,7 +99,7 @@ namespace ShoppingPlatform.Services
                 consignee_name = request.Name,
                 consignee_address = request.Address,
                 add = request.Address,
-
+                pin = request.DropPinCode,
                 phone = request.DropPhone,
 
                 destination_country = request.CountryCode,
