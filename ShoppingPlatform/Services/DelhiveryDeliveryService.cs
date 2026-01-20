@@ -80,7 +80,7 @@ namespace ShoppingPlatform.Services
         {
             await EnsureSecretsLoadedAsync();
 
-            var internalShipmentId = await GenerateInternalShipmentIdAsync();
+            var internalShipmentId = request.OrderId;//await GenerateInternalShipmentIdAsync();
 
             var payload = new
             {
