@@ -165,8 +165,8 @@ namespace ShoppingPlatform.Repositories
                 builder.And(
                     builder.Eq(o => o.PaymentMethod, "razorpay"),
                     builder.Or(
-                        builder.Eq(o => o.RazorpayOrderId, null),
-                        builder.Eq(o => o.RazorpayOrderId, "")
+                        builder.Eq(o => o.RazorpayPaymentId, null),
+                        builder.Eq(o => o.RazorpayPaymentId, "")
                     )
                 )
             );
