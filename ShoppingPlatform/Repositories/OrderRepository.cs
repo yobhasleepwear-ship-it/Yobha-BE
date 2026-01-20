@@ -56,8 +56,28 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
         {
-            return await _col.Find(o => o.UserId == userId).SortByDescending(o => o.CreatedAt).ToListAsync();
+            var builder = Builders<Order>.Filter;
+
+            // ✅ Base filter: orders for user
+            var mongoFilter = builder.Eq(o => o.UserId, userId);
+
+            // ❌ Exclude Razorpay orders without RazorpayPaymentId
+            mongoFilter &= builder.Not(
+                builder.And(
+                    builder.Eq(o => o.PaymentMethod, "razorpay"),
+                    builder.Or(
+                        builder.Eq(o => o.RazorpayPaymentId, null),
+                        builder.Eq(o => o.RazorpayPaymentId, "")
+                    )
+                )
+            );
+
+            return await _col
+                .Find(mongoFilter)
+                .SortByDescending(o => o.CreatedAt)
+                .ToListAsync();
         }
+
 
         public async Task<Order?> GetByIdAsync(string id)
         {
