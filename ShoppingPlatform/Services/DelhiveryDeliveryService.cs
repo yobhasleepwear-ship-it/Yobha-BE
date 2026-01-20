@@ -99,7 +99,7 @@ namespace ShoppingPlatform.Services
                 consignee_name = request.Name,
                 consignee_address = request.Address,
                 add = request.Address,
-                pin = request.DropPinCode,
+                //pin = request.DropPinCode,
                 phone = request.DropPhone,
 
                 destination_country = request.CountryCode,
