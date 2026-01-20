@@ -93,7 +93,7 @@ namespace ShoppingPlatform.Services
             new
             {
                 order = internalShipmentId,
-                shipment_type = "International",
+                //shipment_type = "International",
 
                 consignee_name = request.Name,
                 consignee_address = request.Address,
