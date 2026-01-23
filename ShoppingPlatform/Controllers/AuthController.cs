@@ -502,7 +502,7 @@ namespace ShoppingPlatform.Controllers
 
                 SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
 
-                var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.PhoneNumber, LoyaltyPoints = user.LoyaltyPoints } };
+                var data = new { token = accessToken, refreshToken = refreshToken.Token, user = new { user.Id, user.PhoneNumber, LoyaltyPoints = user.LoyaltyPoints,FullName = user.FullName } };
 
                 return Ok(ApiResponse<object>.Ok(data, "OTP verified successfully"));
             }
