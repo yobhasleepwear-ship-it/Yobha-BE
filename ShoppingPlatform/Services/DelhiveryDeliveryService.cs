@@ -161,7 +161,8 @@ namespace ShoppingPlatform.Services
                 payment_mode = request.IsCod ? "COD" : "Prepaid",
                 name = request.DropName,
                 total_amount = request.Amount,
-                country = "India"
+                country = "India",
+                cod_amount = request.CodAmount 
             }
         }
             };
