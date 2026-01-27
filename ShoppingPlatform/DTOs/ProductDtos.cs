@@ -22,6 +22,7 @@ namespace ShoppingPlatform.Dto
         public List<string> AvailableSizes { get; set; } = new List<string>();
         public List<Price> PriceList { get; set; } = new();
         public List<SuggestedProducts> SuggestedProducts { get; set; } = new();
+        public bool IsActive { get; set; }
 
     }
 

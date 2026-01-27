@@ -92,7 +92,8 @@ namespace ShoppingPlatform.Helpers
                 AvailableColors = availableColors,
                 AvailableSizes = availableSizes,
                 PriceList = p.PriceList,
-                SuggestedProducts = p.SuggestedProducts
+                SuggestedProducts = p.SuggestedProducts,
+                IsActive = p.IsActive
             };
         }
 

@@ -166,8 +166,8 @@ namespace ShoppingPlatform.Repositories
             var filters = new List<FilterDefinition<Product>>();
 
             // Base filters
-            filters.Add(builder.Eq(p => p.IsActive, true));
-            filters.Add(builder.Eq(p => p.IsDeleted, false));
+            //filters.Add(builder.Eq(p => p.IsActive, true));
+            //filters.Add(builder.Eq(p => p.IsDeleted, false));
 
             // Text search
             if (!string.IsNullOrWhiteSpace(q))
@@ -615,15 +615,22 @@ namespace ShoppingPlatform.Repositories
         }
 
 
+        //public async Task DeleteAsync(string id)
+        //{
+        //    var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
+        //    var update = Builders<Product>.Update
+        //        .Set(p => p.IsDeleted, true)
+        //        .Set(p => p.IsActive, false)
+        //        .Set(p => p.UpdatedAt, DateTime.UtcNow);
+        //    await _collection.UpdateOneAsync(filter, update);
+        //}
+
         public async Task DeleteAsync(string id)
         {
             var filter = Builders<Product>.Filter.Eq(p => p.Id, id);
-            var update = Builders<Product>.Update
-                .Set(p => p.IsDeleted, true)
-                .Set(p => p.IsActive, false)
-                .Set(p => p.UpdatedAt, DateTime.UtcNow);
-            await _collection.UpdateOneAsync(filter, update);
+            await _collection.DeleteOneAsync(filter);
         }
+
 
         // -----------------------
         // Images & Reviews
