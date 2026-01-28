@@ -140,7 +140,7 @@ namespace ShoppingPlatform.Controllers
         // Admin registration (Admin-only)
         // -----------------------
         [HttpPost("register-admin")]
-        // [Authorize(Roles = "Admin")] // optionally keep it off during initial setup
+        [Authorize(Roles = "Admin")] // optionally keep it off during initial setup
         [AllowAnonymous] // remove this once you only want Admins to create new Admins
         public async Task<ActionResult<ApiResponse<object>>> RegisterAdmin([FromBody] RegisterAdminDto dto)
         {
