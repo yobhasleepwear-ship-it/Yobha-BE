@@ -6,5 +6,7 @@
         public string type { get; set; }
         public string? orderStatus { get; set; }
         public string? paymentStatus { get; set; }
+        public string? RazorpayPaymentId { get; set; }
+        public string? PaymentGatewayResponse { get; set; }
     }
 }

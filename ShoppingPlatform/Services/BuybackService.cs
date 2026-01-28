@@ -306,6 +306,17 @@ namespace ShoppingPlatform.Services
                     .Set(x => x.UpdatedAt, DateTime.UtcNow));
             }
 
+            if (!string.IsNullOrEmpty(request.RazorpayPaymentId))
+            {
+                updates.Add(Builders<BuybackRequest>.Update
+                    .Set(x => x.RazorpayPaymentId, request.RazorpayPaymentId));
+            }
+
+            if (!string.IsNullOrEmpty(request.PaymentGatewayResponse))
+            {
+                updates.Add(Builders<BuybackRequest>.Update
+                    .Set(x => x.RazorpayPaymentId, request.PaymentGatewayResponse));
+            }
             // nothing to update
             if (!updates.Any())
                 return false;
