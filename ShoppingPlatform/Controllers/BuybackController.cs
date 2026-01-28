@@ -55,7 +55,7 @@ namespace ShoppingPlatform.Controllers
                 LoyaltyPoints = dto.LoyaltyPoints, // Only for TradeIn / Recycle (admin finalizes)
                 Currency = dto.Currency ?? "INR",
 
-                PaymentMethod = "COD",             // Default
+                PaymentMethod = "razorpay",             // Default
                 PaymentStatus = "Pending",
 
                 CreatedAt = DateTime.UtcNow,
