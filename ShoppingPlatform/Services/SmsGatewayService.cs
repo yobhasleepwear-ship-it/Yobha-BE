@@ -97,20 +97,21 @@ namespace ShoppingPlatform.Services
 
         public async Task<SmsProviderResult> SendOrderConfirmationSmsAsync(
             string phoneNumber,
-            string orderId,
             string customerName,
+            string orderId,
             string amount,
             CancellationToken ct = default)
         {
             var message =
-                $"New order received. Order ID: {orderId}, Customer: {customerName}, Amount: Rs. {amount}. Please check the admin panel for details. -YOBHA";
+                $"Dear {customerName}your order {orderId} has been successfully placed. Order amount: Rs. {amount}.-YOBHA";
 
             return await SendTemplateSmsAsync(
                 phoneNumber,
                 message,
-                "1107176984040693504", // New Order DLT template ID
+                "1107176984040693504", // ✅ Order Confirmation DLT template ID
                 ct);
         }
+
 
 
         public async Task<SmsProviderResult> SendAdminNewOrderSmsAsync(
