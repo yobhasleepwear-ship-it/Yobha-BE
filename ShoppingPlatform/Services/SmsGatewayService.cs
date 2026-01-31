@@ -246,11 +246,10 @@ namespace ShoppingPlatform.Services
             }
             catch (Exception ex)
             {
-                _logger.LogInformation(
-"DEBUG SMS response: Exception",
-ex.Message+"-"+ex.StackTrace);
+                _logger.LogError(ex, "DEBUG SMS response: Exception occurred");
 
-providerResult.IsSuccess = false;
+
+                providerResult.IsSuccess = false;
                 providerResult.ProviderStatus = "EXCEPTION";
                 providerResult.RawResponse = ex.ToString();
                 providerResult.SessionId = Guid.NewGuid().ToString("N");
