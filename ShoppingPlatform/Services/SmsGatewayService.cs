@@ -205,6 +205,12 @@ namespace ShoppingPlatform.Services
             {
                 var resp = await _http.GetAsync(url, ct);
                 var raw = await resp.Content.ReadAsStringAsync(ct);
+                _logger.LogInformation(
+    "DEBUG SMS response: StatusCode={StatusCode}, Response={Response}",
+    (int)resp.StatusCode,
+    raw
+);
+
                 providerResult.RawResponse = raw;
 
                 try

@@ -633,6 +633,7 @@ namespace ShoppingPlatform.Repositories
 
                     var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
                     var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
+
                     return new CreateOrderResponse
                     {
                         Success = true,
