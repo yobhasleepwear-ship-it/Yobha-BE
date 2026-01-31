@@ -10,6 +10,7 @@ using ShoppingPlatform.Services;
 using ShoppingPlatform.Middleware;
 using ShoppingPlatform.Models;
 using ShoppingPlatform.Sms;
+using DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -149,7 +150,10 @@ builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<ISecretsRepository, MongoSecretsRepository>();
 builder.Services.AddScoped<IBuybackService, BuybackService>();
 builder.Services.AddScoped<IReturnRepository, ReturnRepository>();
-builder.Services.AddScoped<ISmsGatewayService, SmsGatewayService>();
+builder.Services.AddHttpClient<ISmsGatewayService, SmsGatewayService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
 builder.Services.AddScoped<ILoyaltyPointAuditService, LoyaltyPointAuditService>();
 builder.Services.AddScoped<IDeliveryService, DelhiveryDeliveryService>();
 
