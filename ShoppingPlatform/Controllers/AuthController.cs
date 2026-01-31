@@ -870,7 +870,8 @@ namespace ShoppingPlatform.Controllers
                 Zip = dto.Zip,
                 Country = dto.Country,
                 IsDefault = dto.IsDefault,
-                MobileNumner = dto.MobileNumnber
+                MobileNumner = dto.MobileNumnber,
+                countryCode = dto.countryCode
             };
 
             await _users.AddAddressAsync(uid, address);
@@ -901,7 +902,8 @@ namespace ShoppingPlatform.Controllers
                 Zip = dto.Zip,
                 Country = dto.Country,
                 IsDefault = dto.IsDefault,
-                MobileNumner = dto.MobileNumnber
+                MobileNumner = dto.MobileNumnber,
+                countryCode = dto.countryCode
             };
 
             var updated = await _users.UpdateAddressAsync(uid, address);
