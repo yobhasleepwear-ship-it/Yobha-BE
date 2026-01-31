@@ -103,14 +103,15 @@ namespace ShoppingPlatform.Services
             CancellationToken ct = default)
         {
             var message =
-                $"Dear {customerName} your order {orderId} has been successfully placed. Order amount: Rs. {amount}.-YOBHA";
+                $"Dear {customerName} your order {orderId} has been successfully placed. Order amount: Rs. {amount}. -YOBHA";
 
             return await SendTemplateSmsAsync(
                 phoneNumber,
                 message,
-                "1107176984040693504", // ✅ Order Confirmation DLT template ID
+                "1107176984040693504", // Order Confirmation DLT template ID
                 ct);
         }
+
 
 
 
