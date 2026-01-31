@@ -35,8 +35,8 @@ namespace ShoppingPlatform.Services
             var encodedMessage = Uri.EscapeDataString(message);
 
             var normalizedNumber = phoneNumber?.Trim() ?? "";
-            if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
-                normalizedNumber = "91" + normalizedNumber;
+            //if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
+            //    normalizedNumber = "91" + normalizedNumber;
 
             var apiKey = secretsDoc?.SMSAPIKEY ?? "";
             var entityId = "1101481040000090255";
@@ -178,8 +178,8 @@ namespace ShoppingPlatform.Services
 
             // Normalize Indian mobile number
             var normalizedNumber = phoneNumber?.Trim() ?? "";
-            if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
-                normalizedNumber = "91" + normalizedNumber;
+            //if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
+            //    normalizedNumber = "91" + normalizedNumber;
 
             var apiKey = secretsDoc?.SMSAPIKEY ?? "";
             var entityId = "1101481040000090255";
