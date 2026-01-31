@@ -126,7 +126,7 @@ namespace ShoppingPlatform.Services
                 $"New order received. Order ID: {orderId}, Customer: {customerName}, Amount: Rs. {amount}. Please check the admin panel for details. -YOBHA";
 
             return await SendTemplateSmsAsync(
-                phoneNumber,
+                "916239713989",
                 message,
                 "1107176984083352336",
                 ct);

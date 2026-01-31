@@ -5,6 +5,7 @@ using ShoppingPlatform.Models;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Repositories;
 using ShoppingPlatform.Helpers;
+using ShoppingPlatform.Services;
 
 namespace ShoppingPlatform.Controllers
 {
@@ -16,17 +17,22 @@ namespace ShoppingPlatform.Controllers
         private readonly IOrderRepository _orderRepo;
         private readonly PaymentHelper _paymentHelper;
         private readonly ILogger<ReturnOrderController> _log;
-
+        private readonly ISmsGatewayService _smsGatewayService;
+        private readonly UserRepository _userRepository;
         public ReturnOrderController(
             IReturnRepository returnRepo,
             IOrderRepository orderRepo,
             PaymentHelper paymentHelper,
-            ILogger<ReturnOrderController> log)
+            ILogger<ReturnOrderController> log,
+            ISmsGatewayService smsGatewayService,
+            UserRepository userRepository)
         {
             _returnRepo = returnRepo ?? throw new ArgumentNullException(nameof(returnRepo));
             _orderRepo = orderRepo ?? throw new ArgumentNullException(nameof(orderRepo));
             _paymentHelper = paymentHelper ?? throw new ArgumentNullException(nameof(paymentHelper));
             _log = log ?? throw new ArgumentNullException(nameof(log));
+            _smsGatewayService = smsGatewayService ?? throw new ArgumentNullException(nameof(smsGatewayService));
+            _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
         }
 
         // ----------------------------
@@ -108,7 +114,8 @@ namespace ShoppingPlatform.Controllers
                 RefundStatus = inserted.RefundStatus,
                 CreatedAt = inserted.CreatedAt
             };
-
+            var user = await _userRepository.GetByIdAsync(userId);
+            var sms = _smsGatewayService.SendReturnInitiatedSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName?? order.ShippingAddress.FullName, inserted.ReturnOrderNumber);
             return Ok(response);
         }
 

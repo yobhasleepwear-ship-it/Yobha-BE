@@ -14,6 +14,8 @@ using System.Text.RegularExpressions;
 using ShoppingPlatform.Services;
 using DocumentFormat.OpenXml.Drawing.Charts;
 using Order = ShoppingPlatform.Models.Order;
+using DocumentFormat.OpenXml.Spreadsheet;
+using DocumentFormat.OpenXml.Office2010.Excel;
 
 namespace ShoppingPlatform.Repositories
 {
@@ -31,13 +33,14 @@ namespace ShoppingPlatform.Repositories
         //private readonly IMongoCollection<GiftCard> _giftCardCollection;
         UserRepository _userRepository;
         private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
+        private readonly SmsGatewayService _smsGatewayService;
 
 
         public OrderRepository(IMongoDatabase db, IMongoClient mongoClient, IHttpClientFactory httpClientFactory,
         IConfiguration configuration,GiftCardHelper giftCardHelper,
                         PaymentHelper paymentHelper
                         //,IMongoCollection<GiftCard> giftCardCollection
-                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService
+                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService,SmsGatewayService smsGatewayService
             )
         {
             _products = db.GetCollection<Product>("products");
@@ -52,6 +55,7 @@ namespace ShoppingPlatform.Repositories
             //_giftCardCollection = giftCardCollection;
             _userRepository = userRepository;
             _loyaltyPointAuditService = loyaltyPointAuditService;
+            _smsGatewayService = smsGatewayService;
         }
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
@@ -253,7 +257,7 @@ namespace ShoppingPlatform.Repositories
                 // allow empty shipping address only if buying gift card
                 if (req.GiftCardAmount == null) throw new ArgumentException("ShippingAddress required for non-gift-card orders");
             }
-
+            var user = await _userRepository.GetByIdAsync(userId);
             // resolve products only if there are items
             var orderItems = new List<OrderItem>();
             List<Product> products = new List<Product>();
@@ -344,7 +348,7 @@ namespace ShoppingPlatform.Repositories
                 CouponCode = req.CouponCode,
                 PaymentMethod = req.PaymentMethod ?? "COD",
                 PaymentStatus = "Pending",
-                Status = "Pending",
+                Status = req.PaymentMethod == "COD"? "Confirmed":"Pending",
                 CreatedAt = DateTime.UtcNow,
                 GiftCardNumber = req.GiftCardNumber,
                 GiftCardAmount = req.GiftCardAmount,
@@ -426,6 +430,8 @@ namespace ShoppingPlatform.Repositories
                         };
                     }
 
+                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.GiftCardNumber, order.GiftCardAmount+"");
+                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.GiftCardNumber, order.GiftCardAmount + "");
                     // Non-razorpay payment for gift card: return as before
                     return new CreateOrderResponse
                     {
@@ -624,6 +630,9 @@ namespace ShoppingPlatform.Repositories
                     }
 
                     // Non-razorpay path: return success wrapper
+
+                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
+                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
                     return new CreateOrderResponse
                     {
                         Success = true,
@@ -741,6 +750,14 @@ namespace ShoppingPlatform.Repositories
                 .Set(o => o.UpdatedAt, DateTime.UtcNow);
 
             var result = await _col.UpdateOneAsync(filter, update);
+
+            var order = await _col.Find(o => o.RazorpayOrderId == razorpayOrderId).FirstOrDefaultAsync();
+            var user = await _userRepository.GetByIdAsync(order.UserId);
+
+
+            var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
+            var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
+
             return result.ModifiedCount > 0;
         }
 
@@ -862,6 +879,14 @@ namespace ShoppingPlatform.Repositories
                 x => x.Id == request.id,
                 update
             );
+
+            if (request.orderStatus == "Cancelled")
+            {
+                var order = await _col.Find(o => o.Id == request.id).FirstOrDefaultAsync();
+                var user = await _userRepository.GetByIdAsync(order.UserId);
+                var smsuser = _smsGatewayService.SendOrderCancellationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName??order.ShippingAddress.FullName, order.OrderNumber);
+
+            }
 
             return result.MatchedCount > 0;
         }
