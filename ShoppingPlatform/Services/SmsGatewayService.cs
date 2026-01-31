@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json.Linq;
+﻿using DocumentFormat.OpenXml.Spreadsheet;
+using Newtonsoft.Json.Linq;
 using ShoppingPlatform.DTOs;
 using ShoppingPlatform.Repositories;
 using System.Net;
@@ -245,7 +246,11 @@ namespace ShoppingPlatform.Services
             }
             catch (Exception ex)
             {
-                providerResult.IsSuccess = false;
+                _logger.LogInformation(
+"DEBUG SMS response: Exception",
+ex.Message+"-"+ex.StackTrace);
+
+providerResult.IsSuccess = false;
                 providerResult.ProviderStatus = "EXCEPTION";
                 providerResult.RawResponse = ex.ToString();
                 providerResult.SessionId = Guid.NewGuid().ToString("N");
