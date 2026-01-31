@@ -33,14 +33,14 @@ namespace ShoppingPlatform.Repositories
         //private readonly IMongoCollection<GiftCard> _giftCardCollection;
         UserRepository _userRepository;
         private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
-        private readonly SmsGatewayService _smsGatewayService;
+        private readonly ISmsGatewayService _smsGatewayService;
 
 
         public OrderRepository(IMongoDatabase db, IMongoClient mongoClient, IHttpClientFactory httpClientFactory,
         IConfiguration configuration,GiftCardHelper giftCardHelper,
                         PaymentHelper paymentHelper
                         //,IMongoCollection<GiftCard> giftCardCollection
-                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService,SmsGatewayService smsGatewayService
+                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService, ISmsGatewayService smsGatewayService
             )
         {
             _products = db.GetCollection<Product>("products");
