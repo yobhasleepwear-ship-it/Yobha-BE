@@ -964,6 +964,21 @@ namespace ShoppingPlatform.Controllers
             return Ok(result);
         }
 
+        [HttpGet("test-sms")]
+        public async Task<IActionResult> TestSMS()
+        {
+            var result = await _smsGatewayService.SendOrderConfirmationSmsAsync(
+                "919167982573",
+                "Samrat",
+                "ORD123",
+                "1");
+
+            if (result.IsSuccess)
+                return Ok(result);
+
+            return BadRequest(result);
+        }
+
     }
 
     // -----------------------

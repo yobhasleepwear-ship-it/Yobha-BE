@@ -94,6 +94,156 @@ namespace ShoppingPlatform.Services
             return (providerResult, otp);
         }
 
+        public async Task<SmsProviderResult> SendOrderConfirmationSmsAsync(
+    string phoneNumber,
+    string customerName,
+    string orderId,
+    string amount,
+    CancellationToken ct = default)
+        {
+            var message =
+                $"Dear {customerName}, your order {orderId} has been successfully placed. Order amount: Rs. {amount}. -YOBHA";
+
+            return await SendTemplateSmsAsync(
+                phoneNumber,
+                message,
+                "1107176984040693504",
+                ct);
+        }
+
+        public async Task<SmsProviderResult> SendAdminNewOrderSmsAsync(
+    string phoneNumber,
+    string orderId,
+    string customerName,
+    string amount,
+    CancellationToken ct = default)
+        {
+            var message =
+                $"New order received. Order ID: {orderId}, Customer: {customerName}, Amount: Rs. {amount}. Please check the admin panel for details. -YOBHA";
+
+            return await SendTemplateSmsAsync(
+                phoneNumber,
+                message,
+                "1107176984083352336",
+                ct);
+        }
+
+        public async Task<SmsProviderResult> SendReturnInitiatedSmsAsync(
+    string phoneNumber,
+    string customerName,
+    string orderId,
+    CancellationToken ct = default)
+        {
+            var message =
+                $"Dear {customerName}, return request for order {orderId} has been initiated. -YOBHA";
+
+            return await SendTemplateSmsAsync(
+                phoneNumber,
+                message,
+                "1107176984074904642",
+                ct);
+        }
+
+
+        public async Task<SmsProviderResult> SendOrderCancellationSmsAsync(
+    string phoneNumber,
+    string customerName,
+    string orderId,
+    CancellationToken ct = default)
+        {
+            var message =
+                $"Dear {customerName}, your order {orderId} has been cancelled successfully. -YOBHA";
+
+            return await SendTemplateSmsAsync(
+                phoneNumber,
+                message,
+                "1107176984049785231",
+                ct);
+        }
+
+        private async Task<SmsProviderResult> SendTemplateSmsAsync(
+    string phoneNumber,
+    string message,
+    string dlttemplateid,
+    CancellationToken ct = default)
+        {
+            var secretsDoc = await _secretsRepo.GetSecretsByAddedForAsync("OTP");
+
+            // URL encode message (DLT safe)
+            var encodedMessage = Uri.EscapeDataString(message);
+
+            // Normalize Indian mobile number
+            var normalizedNumber = phoneNumber?.Trim() ?? "";
+            if (!normalizedNumber.StartsWith("91") && normalizedNumber.Length == 10)
+                normalizedNumber = "91" + normalizedNumber;
+
+            var apiKey = secretsDoc?.SMSAPIKEY ?? "";
+            var entityId = "1101481040000090255";
+
+            var url =
+                $"https://www.smsgatewayhub.com/api/mt/SendSMS" +
+                $"?APIKey={Uri.EscapeDataString(apiKey)}" +
+                $"&senderid={Uri.EscapeDataString(_senderId)}" +
+                $"&channel=2" +
+                $"&DCS=0" +
+                $"&flashsms=0" +
+                $"&number={Uri.EscapeDataString(normalizedNumber)}" +
+                $"&text={encodedMessage}" +
+                $"&route=1" +
+                $"&EntityId={Uri.EscapeDataString(entityId)}" +
+                $"&dlttemplateid={Uri.EscapeDataString(dlttemplateid)}";
+
+            _logger.LogInformation("DEBUG SMS message url: [{url}]", url);
+
+            var providerResult = new SmsProviderResult { IsSuccess = false };
+
+            try
+            {
+                var resp = await _http.GetAsync(url, ct);
+                var raw = await resp.Content.ReadAsStringAsync(ct);
+                providerResult.RawResponse = raw;
+
+                try
+                {
+                    var j = JObject.Parse(raw);
+
+                    var errorCode = j["ErrorCode"]?.ToString();
+                    providerResult.ProviderStatus =
+                        j["ErrorMessage"]?.ToString()
+                        ?? (resp.IsSuccessStatusCode ? "OK" : $"HTTP_{(int)resp.StatusCode}");
+
+                    providerResult.IsSuccess =
+                        string.Equals(errorCode, "000", StringComparison.OrdinalIgnoreCase);
+
+                    var messageData = j["MessageData"] as JArray;
+                    if (messageData != null && messageData.Count > 0)
+                        providerResult.ProviderMessageId =
+                            messageData[0]?["MessageId"]?.ToString();
+
+                    providerResult.SessionId =
+                        providerResult.ProviderMessageId
+                        ?? Guid.NewGuid().ToString("N");
+                }
+                catch
+                {
+                    // Fallback if response is not JSON
+                    providerResult.ProviderStatus =
+                        resp.IsSuccessStatusCode ? "OK" : $"HTTP_{(int)resp.StatusCode}";
+                    providerResult.IsSuccess = resp.IsSuccessStatusCode;
+                    providerResult.SessionId = Guid.NewGuid().ToString("N");
+                }
+            }
+            catch (Exception ex)
+            {
+                providerResult.IsSuccess = false;
+                providerResult.ProviderStatus = "EXCEPTION";
+                providerResult.RawResponse = ex.ToString();
+                providerResult.SessionId = Guid.NewGuid().ToString("N");
+            }
+
+            return providerResult;
+        }
+
         private string? ExtractMessageIdFromRaw(string raw)
         {
             // implement parsing if you know SMSGatewayHub response format.
