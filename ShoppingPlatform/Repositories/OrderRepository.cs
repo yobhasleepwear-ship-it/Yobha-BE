@@ -430,8 +430,8 @@ namespace ShoppingPlatform.Repositories
                         };
                     }
 
-                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.GiftCardNumber, order.GiftCardAmount+"");
-                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.GiftCardNumber, order.GiftCardAmount + "");
+                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName?? order.ShippingAddress.FullName, order.GiftCardNumber, order.GiftCardAmount+"");
+                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.GiftCardNumber, order.GiftCardAmount + "");
                     // Non-razorpay payment for gift card: return as before
                     return new CreateOrderResponse
                     {
@@ -631,8 +631,8 @@ namespace ShoppingPlatform.Repositories
 
                     // Non-razorpay path: return success wrapper
 
-                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
-                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName, order.OrderNumber, order.Total + "");
+                    var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
+                    var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
 
                     return new CreateOrderResponse
                     {
@@ -757,7 +757,7 @@ namespace ShoppingPlatform.Repositories
 
 
             var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
-            var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
+            var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName,  order.OrderNumber,order.Total + "");
 
             return result.ModifiedCount > 0;
         }
