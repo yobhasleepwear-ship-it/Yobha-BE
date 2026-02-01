@@ -348,7 +348,7 @@ namespace ShoppingPlatform.Repositories
                 CouponCode = req.CouponCode,
                 PaymentMethod = req.PaymentMethod ?? "COD",
                 PaymentStatus = "Pending",
-                Status = req.PaymentMethod == "COD"? "Confirmed":"Pending",
+                Status = req.PaymentMethod?.ToUpper() == "COD"? "Confirmed":"Pending",
                 CreatedAt = DateTime.UtcNow,
                 GiftCardNumber = req.GiftCardNumber,
                 GiftCardAmount = req.GiftCardAmount,
@@ -748,7 +748,8 @@ namespace ShoppingPlatform.Repositories
             var update = Builders<Order>.Update
                 .Set(o => o.RazorpayPaymentId, razorpayPaymentId)
                 .Set(o => o.PaymentStatus, isSuccess ? "Paid" : "Failed")
-                .Set(o => o.UpdatedAt, DateTime.UtcNow);
+                .Set(o => o.UpdatedAt, DateTime.UtcNow)
+                .Set(o=> o.Status,"Confirmed");
 
             var result = await _col.UpdateOneAsync(filter, update);
 
