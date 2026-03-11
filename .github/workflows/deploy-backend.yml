@@ -22,10 +22,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: 9.0.x
+      - name: Verify .NET on runner
+        run: |
+          dotnet --info
+          dotnet --list-sdks
 
       - name: Validate deployment variables
         run: |
