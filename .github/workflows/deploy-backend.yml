@@ -11,13 +11,10 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       PROJECT_PATH: ShoppingPlatform/ShoppingPlatform.csproj
       PUBLISH_DIR: ./publish
-      EC2_HOST: ${{ secrets.EC2_HOST }}
-      EC2_USER: ${{ secrets.EC2_USER }}
-      EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
       BACKEND_SERVICE_NAME: ${{ secrets.BACKEND_SERVICE_NAME }}
       BACKEND_DEPLOY_PATH: ${{ secrets.BACKEND_DEPLOY_PATH }}
 
@@ -32,9 +29,6 @@ jobs:
 
       - name: Validate deployment variables
         run: |
-          test -n "$EC2_HOST" || (echo "Missing secret: EC2_HOST" && exit 1)
-          test -n "$EC2_USER" || (echo "Missing secret: EC2_USER" && exit 1)
-          test -n "$EC2_SSH_PRIVATE_KEY" || (echo "Missing secret: EC2_SSH_PRIVATE_KEY" && exit 1)
           test -n "$BACKEND_SERVICE_NAME" || (echo "Missing secret: BACKEND_SERVICE_NAME" && exit 1)
           test -n "$BACKEND_DEPLOY_PATH" || (echo "Missing secret: BACKEND_DEPLOY_PATH" && exit 1)
 
@@ -44,19 +38,12 @@ jobs:
       - name: Publish
         run: dotnet publish "$PROJECT_PATH" -c Release -o "$PUBLISH_DIR"
 
-      - name: Add SSH key
+      - name: Deploy files to service directory
         run: |
-          mkdir -p ~/.ssh
-          printf "%s" "$EC2_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "echo SSH_OK"
-
-      - name: Upload published artifacts
-        run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "mkdir -p $BACKEND_DEPLOY_PATH"
-          rsync -az --delete -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new" "$PUBLISH_DIR"/ "$EC2_USER@$EC2_HOST:$BACKEND_DEPLOY_PATH/"
+          sudo mkdir -p "$BACKEND_DEPLOY_PATH"
+          sudo rsync -az --delete "$PUBLISH_DIR"/ "$BACKEND_DEPLOY_PATH"/
 
       - name: Restart backend service
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "sudo systemctl restart $BACKEND_SERVICE_NAME && sudo systemctl status $BACKEND_SERVICE_NAME --no-pager"
+          sudo systemctl restart "$BACKEND_SERVICE_NAME"
+          sudo systemctl status "$BACKEND_SERVICE_NAME" --no-pager
