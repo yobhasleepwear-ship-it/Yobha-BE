@@ -37,6 +37,7 @@ namespace ShoppingPlatform.Controllers
         private readonly ILogger<AuthController> _logger;
         private readonly ISmsGatewayService _smsGatewayService;
         private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
+        private readonly IBrevoCrmService _brevoCrm;
 
         public AuthController(
             UserRepository users,
@@ -49,7 +50,8 @@ namespace ShoppingPlatform.Controllers
             ReferralService referralService,
             ILogger<AuthController> logger,
             ISmsGatewayService smsGatewayService,
-            ILoyaltyPointAuditService loyaltyPointAuditService)
+            ILoyaltyPointAuditService loyaltyPointAuditService,
+            IBrevoCrmService brevoCrm)
         {
             _users = users;
             _otps = otps;
@@ -62,6 +64,7 @@ namespace ShoppingPlatform.Controllers
             _logger = logger;
             _smsGatewayService = smsGatewayService;
             _loyaltyPointAuditService = loyaltyPointAuditService;
+            _brevoCrm = brevoCrm;
         }
 
         // -----------------------
@@ -121,6 +124,15 @@ namespace ShoppingPlatform.Controllers
             }
 
             // set cookie for web clients
+            try
+            {
+                await _brevoCrm.TrackSignupAsync(user);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Brevo signup tracking failed for user {UserId}", user.Id);
+            }
+
             SetRefreshTokenCookie(refreshToken.Token, refreshToken.ExpiresAt);
 
             var data = new
@@ -444,6 +456,7 @@ namespace ShoppingPlatform.Controllers
         {
             try
             {
+                var createdNewUser = false;
                 var entry = await _otps.GetLatestForPhoneAsync(dto.PhoneNumber);
                 if (entry is null)
                 {
@@ -471,6 +484,7 @@ namespace ShoppingPlatform.Controllers
                         CreatedAt = DateTime.UtcNow
                     };
                     await _users.CreateAsync(user);
+                    createdNewUser = true;
                 }
                 else if (!user.PhoneVerified)
                 {
@@ -488,6 +502,18 @@ namespace ShoppingPlatform.Controllers
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Referral redemption failed on OTP signup {Phone}", dto.PhoneNumber);
+                }
+
+                if (createdNewUser)
+                {
+                    try
+                    {
+                        await _brevoCrm.TrackSignupAsync(user);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Brevo signup tracking failed on OTP signup for user {UserId}", user.Id);
+                    }
                 }
 
                 // token generation
@@ -674,6 +700,15 @@ namespace ShoppingPlatform.Controllers
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Referral redemption failed on Google signup for {Email}", user.Email);
+                }
+
+                try
+                {
+                    await _brevoCrm.TrackSignupAsync(user);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Brevo signup tracking failed on Google signup for user {UserId}", user.Id);
                 }
             }
 

@@ -187,6 +187,18 @@ builder.Services.AddHttpClient<IRazorpayService, RazorpayService>();
 // ---------------------------
 // AWS S3
 // ---------------------------
+builder.Services.Configure<BrevoSettings>(configuration.GetSection("Brevo"));
+
+builder.Services.AddHttpClient<IBrevoCrmService, BrevoCrmService>((sp, client) =>
+{
+    var settings = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<BrevoSettings>>().Value;
+    var baseUrl = string.IsNullOrWhiteSpace(settings.BaseUrl) ? "https://api.brevo.com/v3" : settings.BaseUrl;
+    client.BaseAddress = new Uri(baseUrl.EndsWith("/") ? baseUrl : baseUrl + "/");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
+
+builder.Services.AddHostedService<CartAbandonMonitorService>();
+
 builder.Services.Configure<AwsS3Settings>(configuration.GetSection("AwsS3"));
 var awsSettings = configuration.GetSection("AwsS3").Get<AwsS3Settings>();
 if (awsSettings is not null && !string.IsNullOrEmpty(awsSettings.Region))
@@ -210,7 +222,7 @@ builder.Services.AddHttpClient<TwoFactorService>(c =>
 {
     c.Timeout = TimeSpan.FromSeconds(15);
 });
-builder.Services.AddSingleton<ISmsSender, TwoFactorSmsSender>();
+builder.Services.AddScoped<ISmsSender, TwoFactorSmsSender>();
 
 // Optional: Log presence of TwoFactor key at startup (non-secret)
 var twoFactorApiKey = configuration["TwoFactor:ApiKey"]

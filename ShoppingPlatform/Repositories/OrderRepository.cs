@@ -34,13 +34,15 @@ namespace ShoppingPlatform.Repositories
         UserRepository _userRepository;
         private readonly ILoyaltyPointAuditService _loyaltyPointAuditService;
         private readonly ISmsGatewayService _smsGatewayService;
+        private readonly IBrevoCrmService _brevoCrm;
+        private readonly ILogger<OrderRepository> _logger;
 
 
         public OrderRepository(IMongoDatabase db, IMongoClient mongoClient, IHttpClientFactory httpClientFactory,
         IConfiguration configuration,GiftCardHelper giftCardHelper,
                         PaymentHelper paymentHelper
                         //,IMongoCollection<GiftCard> giftCardCollection
-                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService, ISmsGatewayService smsGatewayService
+                        ,UserRepository userRepository,ILoyaltyPointAuditService loyaltyPointAuditService, ISmsGatewayService smsGatewayService, IBrevoCrmService brevoCrm, ILogger<OrderRepository> logger
             )
         {
             _products = db.GetCollection<Product>("products");
@@ -56,6 +58,8 @@ namespace ShoppingPlatform.Repositories
             _userRepository = userRepository;
             _loyaltyPointAuditService = loyaltyPointAuditService;
             _smsGatewayService = smsGatewayService;
+            _brevoCrm = brevoCrm;
+            _logger = logger;
         }
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
@@ -432,6 +436,15 @@ namespace ShoppingPlatform.Repositories
 
                     var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName?? order.ShippingAddress.FullName, order.GiftCardNumber, order.GiftCardAmount+"");
                     var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.GiftCardNumber, order.GiftCardAmount + "");
+
+                    try
+                    {
+                        await _brevoCrm.TrackOrderPlacedAsync(order, user);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Brevo order tracking failed for gift-card order {OrderNumber}", order?.OrderNumber);
+                    }
                     // Non-razorpay payment for gift card: return as before
                     return new CreateOrderResponse
                     {
@@ -634,6 +647,15 @@ namespace ShoppingPlatform.Repositories
                     var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
                     var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
 
+                    try
+                    {
+                        await _brevoCrm.TrackOrderPlacedAsync(order, user);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Brevo order tracking failed for order {OrderNumber}", order?.OrderNumber);
+                    }
+
                     return new CreateOrderResponse
                     {
                         Success = true,
@@ -759,6 +781,18 @@ namespace ShoppingPlatform.Repositories
 
             var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
             var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName,  order.OrderNumber,order.Total + "");
+
+            if (isSuccess && order != null)
+            {
+                try
+                {
+                    await _brevoCrm.TrackOrderPlacedAsync(order, user);
+                }
+                catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Brevo order tracking failed after payment update for order {OrderNumber}", order?.OrderNumber);
+                    }
+            }
 
             return result.ModifiedCount > 0;
         }
