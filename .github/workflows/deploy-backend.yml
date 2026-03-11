@@ -23,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: 9.0.x
 
@@ -47,15 +47,16 @@ jobs:
       - name: Add SSH key
         run: |
           mkdir -p ~/.ssh
-          printf "%s\n" "$EC2_SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
+          printf "%s" "$EC2_SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "echo SSH_OK"
 
       - name: Upload published artifacts
         run: |
-          ssh "$EC2_USER@$EC2_HOST" "mkdir -p $BACKEND_DEPLOY_PATH"
-          rsync -az --delete "$PUBLISH_DIR"/ "$EC2_USER@$EC2_HOST:$BACKEND_DEPLOY_PATH/"
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "mkdir -p $BACKEND_DEPLOY_PATH"
+          rsync -az --delete -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new" "$PUBLISH_DIR"/ "$EC2_USER@$EC2_HOST:$BACKEND_DEPLOY_PATH/"
 
       - name: Restart backend service
         run: |
-          ssh "$EC2_USER@$EC2_HOST" "sudo systemctl restart $BACKEND_SERVICE_NAME && sudo systemctl status $BACKEND_SERVICE_NAME --no-pager"
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=accept-new "$EC2_USER@$EC2_HOST" "sudo systemctl restart $BACKEND_SERVICE_NAME && sudo systemctl status $BACKEND_SERVICE_NAME --no-pager"
