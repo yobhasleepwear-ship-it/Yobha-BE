@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using ShoppingPlatform.Configurations;
 using ShoppingPlatform.Models;
@@ -70,7 +71,12 @@ namespace ShoppingPlatform.Services
 
             foreach (var candidate in grouped)
             {
-                if (string.IsNullOrWhiteSpace(candidate.UserId)) continue;
+                if (string.IsNullOrWhiteSpace(candidate.UserId) || !ObjectId.TryParse(candidate.UserId, out _))
+                {
+                    // Skip guest/anonymous carts because users collection uses ObjectId ids.
+                    skippedCount++;
+                    continue;
+                }
 
                 var audit = await _auditCollection
                     .Find(x => x.UserId == candidate.UserId)
