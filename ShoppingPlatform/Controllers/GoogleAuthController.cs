@@ -32,6 +32,7 @@ namespace ShoppingPlatform.Controllers
         private readonly IHostEnvironment _env;
         private readonly HashSet<string> _allowedReturnHosts;
         private readonly string? _defaultReturnUrl;
+        private readonly IBrevoCrmService _brevoCrm;
 
         public GoogleAuthController(
             UserRepository users,
@@ -41,7 +42,8 @@ namespace ShoppingPlatform.Controllers
             InviteRepository invites,
             IConfiguration config,
             IOptions<GoogleSettings> googleOptions,
-            IHostEnvironment env)
+            IHostEnvironment env,
+            IBrevoCrmService brevoCrm)
         {
             _users = users;
             _otps = otps;
@@ -58,6 +60,7 @@ namespace ShoppingPlatform.Controllers
             // IMPORTANT: set this in appsettings.json to your frontend home:
             // "Auth:DefaultReturnUrl": "https://yobha-test-env.vercel.app/home"
             _defaultReturnUrl = _config["Auth:DefaultReturnUrl"];
+            _brevoCrm = brevoCrm;
         }
 
         [HttpGet("google/redirect")]
@@ -165,6 +168,15 @@ namespace ShoppingPlatform.Controllers
                     if (payload.EmailVerified == true) user.EmailVerified = true;
                     await _users.UpdateAsync(user.Id!, user);
                 }
+            }
+
+            try
+            {
+                await _brevoCrm.TrackSignupAsync(user);
+            }
+            catch
+            {
+                // Non-blocking: OAuth login should not fail if CRM sync fails.
             }
 
             // Issue JWT + refresh token
