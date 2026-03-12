@@ -14,9 +14,8 @@ jobs:
     runs-on: self-hosted
     env:
       PROJECT_PATH: ShoppingPlatform/ShoppingPlatform.csproj
-      PUBLISH_DIR: ./publish
+      PUBLISH_DIR: ${{ github.workspace }}/publish
       BACKEND_SERVICE_NAME: ${{ secrets.BACKEND_SERVICE_NAME }}
-      BACKEND_DEPLOY_PATH: ${{ secrets.BACKEND_DEPLOY_PATH }}
 
     steps:
       - name: Checkout
@@ -27,10 +26,16 @@ jobs:
           dotnet --info
           dotnet --list-sdks
 
-      - name: Validate deployment variables
+      - name: Validate required variables
         run: |
           test -n "$BACKEND_SERVICE_NAME" || (echo "Missing secret: BACKEND_SERVICE_NAME" && exit 1)
-          test -n "$BACKEND_DEPLOY_PATH" || (echo "Missing secret: BACKEND_DEPLOY_PATH" && exit 1)
+
+      - name: Resolve deployment path from service
+        run: |
+          DEPLOY_PATH="$(systemctl show "$BACKEND_SERVICE_NAME" --property=WorkingDirectory --value)"
+          test -n "$DEPLOY_PATH" || (echo "Could not resolve WorkingDirectory for service: $BACKEND_SERVICE_NAME" && exit 1)
+          echo "Resolved deploy path: $DEPLOY_PATH"
+          echo "BACKEND_DEPLOY_PATH=$DEPLOY_PATH" >> "$GITHUB_ENV"
 
       - name: Restore
         run: dotnet restore "$PROJECT_PATH"
@@ -42,6 +47,8 @@ jobs:
         run: |
           sudo mkdir -p "$BACKEND_DEPLOY_PATH"
           sudo rsync -az --delete "$PUBLISH_DIR"/ "$BACKEND_DEPLOY_PATH"/
+          sudo test -f "$BACKEND_DEPLOY_PATH/ShoppingPlatform.dll" || (echo "Deployed DLL not found at $BACKEND_DEPLOY_PATH" && exit 1)
+          sudo stat "$BACKEND_DEPLOY_PATH/ShoppingPlatform.dll"
 
       - name: Restart backend service
         run: |
