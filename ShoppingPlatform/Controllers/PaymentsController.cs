@@ -34,16 +34,13 @@ namespace ShoppingPlatform.Controllers
             var ok = _razorpay.VerifyPaymentSignature(req.razorpayOrderId, req.razorpayPaymentId, req.razorpaySignature);
             if (!ok) return BadRequest(ApiResponse<object>.Fail("Signature verification failed", null, System.Net.HttpStatusCode.BadRequest));
 
+            // Use repository payment-status update path so all side effects (including Brevo tracking) stay consistent.
+            var updated = await _orderRepo.UpdatePaymentStatusAsync(req.razorpayOrderId, req.razorpayPaymentId, true);
+            if (!updated) return NotFound(ApiResponse<object>.Fail("Order not found", null, System.Net.HttpStatusCode.NotFound));
+
             // find order by our own order id (receipt)
             var order = await _orderRepo.GetByIdAsync(req.orderId);
             if (order == null) return NotFound(ApiResponse<object>.Fail("Order not found", null, System.Net.HttpStatusCode.NotFound));
-
-            // record payment details and mark Paid
-            order.RazorpayPaymentId = req.razorpayPaymentId;
-            order.PaymentStatus = "Paid";
-            order.Status = "Paid";
-            order.PaymentGatewayResponse = $"razorpay_order:{req.razorpayOrderId}, payment:{req.razorpayPaymentId}";
-            await _orderRepo.UpdateAsync(order.Id, order);
 
             // Mark coupon used now (if present and not already recorded)
             if (!string.IsNullOrEmpty(order.CouponId) && !order.CouponUsageRecorded)

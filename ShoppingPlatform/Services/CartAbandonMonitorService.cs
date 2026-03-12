@@ -55,6 +55,8 @@ namespace ShoppingPlatform.Services
         {
             var abandonAfter = Math.Max(1, _settings.CartAbandonAfterMinutes);
             var cutoffUtc = DateTime.UtcNow.AddMinutes(-abandonAfter);
+            var sentCount = 0;
+            var skippedCount = 0;
 
             // Group by user and inspect latest cart update time.
             var grouped = await _cartCollection.Aggregate()
@@ -77,18 +79,21 @@ namespace ShoppingPlatform.Services
                 // If we've already notified for this cart state (or newer), skip.
                 if (audit != null && audit.LastCartUpdatedAt >= candidate.LastCartUpdatedAt)
                 {
+                    skippedCount++;
                     continue;
                 }
 
                 var user = await _userRepository.GetByIdAsync(candidate.UserId);
                 if (user == null || string.IsNullOrWhiteSpace(user.Email))
                 {
+                    skippedCount++;
                     continue;
                 }
 
                 var cartItems = await _cartCollection.Find(c => c.UserId == candidate.UserId).ToListAsync(ct);
                 if (cartItems.Count == 0)
                 {
+                    skippedCount++;
                     continue;
                 }
 
@@ -96,6 +101,7 @@ namespace ShoppingPlatform.Services
                 if (!sent)
                 {
                     _logger.LogWarning("Brevo cart-abandon send failed for user {UserId}; will retry on next scan", candidate.UserId);
+                    skippedCount++;
                     continue;
                 }
 
@@ -109,7 +115,13 @@ namespace ShoppingPlatform.Services
                     upsert,
                     new UpdateOptions { IsUpsert = true },
                     ct);
+
+                sentCount++;
             }
+
+            _logger.LogInformation(
+                "Cart-abandon scan done. Cutoff={CutoffUtc} Candidates={CandidateCount} Sent={SentCount} Skipped={SkippedCount}",
+                cutoffUtc, grouped.Count, sentCount, skippedCount);
         }
     }
 }

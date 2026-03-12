@@ -30,7 +30,11 @@ namespace ShoppingPlatform.Services
         public Task<bool> TrackSignupAsync(User user, CancellationToken ct = default)
         {
             var email = user.Email?.Trim().ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(email)) return Task.FromResult(false);
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                _logger.LogInformation("Brevo signup skipped: missing email for user {UserId}", user.Id);
+                return Task.FromResult(false);
+            }
 
             var attrs = new Dictionary<string, object?>
             {
@@ -46,7 +50,11 @@ namespace ShoppingPlatform.Services
         public Task<bool> TrackOrderPlacedAsync(Order order, User? user = null, CancellationToken ct = default)
         {
             var email = ResolveOrderEmail(order, user);
-            if (string.IsNullOrWhiteSpace(email)) return Task.FromResult(false);
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                _logger.LogInformation("Brevo order tracking skipped: missing email for order {OrderNumber}", order.OrderNumber);
+                return Task.FromResult(false);
+            }
 
             var attrs = new Dictionary<string, object?>
             {
@@ -67,7 +75,11 @@ namespace ShoppingPlatform.Services
         public Task<bool> TrackCartAbandonedAsync(User user, IEnumerable<CartItem> cartItems, DateTime cartUpdatedAtUtc, CancellationToken ct = default)
         {
             var email = user.Email?.Trim().ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(email)) return Task.FromResult(false);
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                _logger.LogInformation("Brevo cart-abandon skipped: missing email for user {UserId}", user.Id);
+                return Task.FromResult(false);
+            }
 
             var items = cartItems?.ToList() ?? new List<CartItem>();
             var itemCount = items.Sum(i => i.Quantity);
@@ -129,6 +141,7 @@ namespace ShoppingPlatform.Services
                     _logger.LogWarning("Brevo upsert failed. Status={Status} Email={Email} Body={Body}", (int)resp.StatusCode, email, body);
                     return false;
                 }
+                _logger.LogInformation("Brevo upsert succeeded for {Email}", email);
                 return true;
             }
             catch (Exception ex)

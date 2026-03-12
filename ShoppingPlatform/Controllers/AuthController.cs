@@ -702,14 +702,16 @@ namespace ShoppingPlatform.Controllers
                     _logger.LogError(ex, "Referral redemption failed on Google signup for {Email}", user.Email);
                 }
 
-                try
-                {
-                    await _brevoCrm.TrackSignupAsync(user);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Brevo signup tracking failed on Google signup for user {UserId}", user.Id);
-                }
+            }
+
+            // Keep Brevo contact in sync for Google sign-in users.
+            try
+            {
+                await _brevoCrm.TrackSignupAsync(user);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Brevo signup tracking failed on Google sign-in for user {UserId}", user.Id);
             }
 
             var accessToken = _jwt.GenerateToken(user);
