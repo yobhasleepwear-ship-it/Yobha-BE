@@ -427,6 +427,8 @@ namespace ShoppingPlatform.Controllers
                 Images = ParseImages(GetStringSafe(row.Cell("M"))),
                 PriceList = ParsePriceList(GetStringSafe(row.Cell("N"))),
                 CountryPrices = ParseCountryPrices(GetStringSafe(row.Cell("O"))),
+                CompareAtPrice = GetNullableDecimalSafe(row.Cell("AC")),
+                DiscountPercent = GetNullableIntSafe(row.Cell("AD")),
 
                 Specifications = new ProductSpecifications
                 {
@@ -534,10 +536,23 @@ namespace ShoppingPlatform.Controllers
 
             var min = basePrices.Min(x => x.PriceAmount);
             var max = basePrices.Max(x => x.PriceAmount);
+            decimal? computedCompareAt = max > min ? max : null;
+            var computedDiscount = max > min ? (int)Math.Round((max - min) / max * 100) : 0;
 
             product.Price = min;
-            product.CompareAtPrice = max > min ? max : null;
-            product.DiscountPercent = max > min ? (int)Math.Round((max - min) / max * 100) : 0;
+
+            // Optional sheet overrides:
+            // AC -> CompareAtPrice, AD -> DiscountPercent.
+            // If missing, keep existing fallback derived from PriceList.
+            if (!product.CompareAtPrice.HasValue)
+            {
+                product.CompareAtPrice = computedCompareAt;
+            }
+
+            if (!product.DiscountPercent.HasValue)
+            {
+                product.DiscountPercent = computedDiscount;
+            }
         }
 
 
@@ -566,6 +581,28 @@ namespace ShoppingPlatform.Controllers
                 return result;
 
             throw new Exception($"Invalid number format: {value}");
+        }
+
+        decimal? GetNullableDecimalSafe(IXLCell cell)
+        {
+            var value = GetStringSafe(cell);
+            return string.IsNullOrWhiteSpace(value) ? null : GetDecimalSafe(value);
+        }
+
+        int? GetNullableIntSafe(IXLCell cell)
+        {
+            var value = GetStringSafe(cell);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            if (int.TryParse(value, out var result))
+            {
+                return Math.Clamp(result, 0, 100);
+            }
+
+            throw new Exception($"Invalid integer format: {value}");
         }
 
 

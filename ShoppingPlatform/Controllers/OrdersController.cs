@@ -466,9 +466,44 @@ namespace ShoppingPlatform.Controllers
         {
             if (string.IsNullOrWhiteSpace(req.RazorpayOrderId))
                 return BadRequest("RazorpayOrderId is required.");
+            if (!req.IsSuccess)
+                return BadRequest("Only successful payment updates are allowed from this endpoint.");
+            if (req.IsSuccess && string.IsNullOrWhiteSpace(req.RazorpayPaymentId))
+                return BadRequest("RazorpayPaymentId is required for successful payments.");
+            if (req.IsSuccess && string.IsNullOrWhiteSpace(req.RazorpaySignature))
+                return BadRequest("RazorpaySignature is required for successful payments.");
 
             try
             {
+                var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirst("uid")?.Value;
+                if (string.IsNullOrWhiteSpace(userId))
+                    return Unauthorized(new { success = false, message = "Unauthorized user." });
+
+                var order = await _orderRepo.GetByRazorpayOrderIdAsync(req.RazorpayOrderId);
+                if (order == null)
+                    return NotFound($"Order with RazorpayOrderId {req.RazorpayOrderId} not found.");
+
+                if (!string.IsNullOrWhiteSpace(req.OrderId) &&
+                    !string.Equals(req.OrderId, order.Id, StringComparison.Ordinal) &&
+                    !string.Equals(req.OrderId, order.OrderNumber, StringComparison.Ordinal))
+                {
+                    return BadRequest(new { success = false, message = "OrderId mismatch for payment update." });
+                }
+
+                if (!string.Equals(order.UserId, userId, StringComparison.Ordinal))
+                    return Forbid();
+
+                if (req.IsSuccess)
+                {
+                    var signatureOk = _razorpayService.VerifyPaymentSignature(
+                        req.RazorpayOrderId,
+                        req.RazorpayPaymentId,
+                        req.RazorpaySignature!);
+
+                    if (!signatureOk)
+                        return BadRequest(new { success = false, message = "Payment signature verification failed." });
+                }
+
                 var result = await _orderRepo.UpdatePaymentStatusAsync(req.RazorpayOrderId, req.RazorpayPaymentId, req.IsSuccess);
                 if (!result)
                     return NotFound($"Order with RazorpayOrderId {req.RazorpayOrderId} not found.");

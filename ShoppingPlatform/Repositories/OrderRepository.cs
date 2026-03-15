@@ -766,35 +766,98 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<bool> UpdatePaymentStatusAsync(string razorpayOrderId, string razorpayPaymentId, bool isSuccess)
         {
-            var filter = Builders<Order>.Filter.Eq(o => o.RazorpayOrderId, razorpayOrderId);
-            var update = Builders<Order>.Update
-                .Set(o => o.RazorpayPaymentId, razorpayPaymentId)
-                .Set(o => o.PaymentStatus, isSuccess ? "Paid" : "Failed")
-                .Set(o => o.UpdatedAt, DateTime.UtcNow)
-                .Set(o=> o.Status,"Confirmed");
-
-            var result = await _col.UpdateOneAsync(filter, update);
-
-            var order = await _col.Find(o => o.RazorpayOrderId == razorpayOrderId).FirstOrDefaultAsync();
-            var user = await _userRepository.GetByIdAsync(order.UserId);
-
-
-            var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName, order.OrderNumber, order.Total + "");
-            var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(order.ShippingAddress.MobileNumner, user?.FullName ?? order.ShippingAddress.FullName,  order.OrderNumber,order.Total + "");
-
-            if (isSuccess && order != null)
+            if (string.IsNullOrWhiteSpace(razorpayOrderId))
             {
-                try
-                {
-                    await _brevoCrm.TrackOrderPlacedAsync(order, user);
-                }
-                catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Brevo order tracking failed after payment update for order {OrderNumber}", order?.OrderNumber);
-                    }
+                return false;
             }
 
-            return result.ModifiedCount > 0;
+            var order = await _col.Find(o => o.RazorpayOrderId == razorpayOrderId).FirstOrDefaultAsync();
+            if (order == null)
+            {
+                return false;
+            }
+
+            // Never allow a paid order to be downgraded by a later update call.
+            if (!isSuccess && string.Equals(order.PaymentStatus, "Paid", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // Success update must include a payment id.
+            if (isSuccess && string.IsNullOrWhiteSpace(razorpayPaymentId))
+            {
+                return false;
+            }
+
+            // Idempotent success: already marked paid with same payment id.
+            if (isSuccess &&
+                string.Equals(order.PaymentStatus, "Paid", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(order.RazorpayPaymentId, razorpayPaymentId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var filter = Builders<Order>.Filter.Eq(o => o.Id, order.Id);
+            var update = Builders<Order>.Update
+                .Set(o => o.UpdatedAt, DateTime.UtcNow)
+                .Set(o => o.PaymentStatus, isSuccess ? "Paid" : "Failed")
+                .Set(o => o.Status, isSuccess ? "Confirmed" : "PaymentFailed");
+
+            if (isSuccess)
+            {
+                update = update.Set(o => o.RazorpayPaymentId, razorpayPaymentId);
+            }
+
+            var result = await _col.UpdateOneAsync(filter, update);
+            if (result.ModifiedCount == 0 && !isSuccess)
+            {
+                // If already failed, treat as success for idempotency.
+                return string.Equals(order.PaymentStatus, "Failed", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var updatedOrder = await _col.Find(o => o.Id == order.Id).FirstOrDefaultAsync();
+            if (updatedOrder == null)
+            {
+                return false;
+            }
+
+            var user = await _userRepository.GetByIdAsync(updatedOrder.UserId);
+
+            if (isSuccess)
+            {
+                var smsuser = _smsGatewayService.SendOrderConfirmationSmsAsync(
+                    updatedOrder.ShippingAddress.MobileNumner,
+                    user?.FullName ?? updatedOrder.ShippingAddress.FullName,
+                    updatedOrder.OrderNumber,
+                    updatedOrder.Total + "");
+                var smsadmin = _smsGatewayService.SendAdminNewOrderSmsAsync(
+                    updatedOrder.ShippingAddress.MobileNumner,
+                    user?.FullName ?? updatedOrder.ShippingAddress.FullName,
+                    updatedOrder.OrderNumber,
+                    updatedOrder.Total + "");
+
+                try
+                {
+                    await _brevoCrm.TrackOrderPlacedAsync(updatedOrder, user);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Brevo order tracking failed after payment update for order {OrderNumber}", updatedOrder.OrderNumber);
+                }
+            }
+
+            return result.ModifiedCount > 0 || (isSuccess &&
+                   string.Equals(updatedOrder.PaymentStatus, "Paid", StringComparison.OrdinalIgnoreCase));
+        }
+
+        public async Task<Order?> GetByRazorpayOrderIdAsync(string razorpayOrderId)
+        {
+            if (string.IsNullOrWhiteSpace(razorpayOrderId))
+            {
+                return null;
+            }
+
+            return await _col.Find(o => o.RazorpayOrderId == razorpayOrderId).FirstOrDefaultAsync();
         }
 
         public async Task<bool> updateOrderForReturn(string orderNumber, List<OrderItem> returnItems)
