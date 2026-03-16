@@ -85,6 +85,8 @@ namespace ShoppingPlatform.Helpers
                 Name = string.IsNullOrWhiteSpace(p.Name) ? (p.ProductMainCategory ?? string.Empty) : p.Name,
                 Description = p.Description ?? string.Empty,
                 Price = PickListPrice(p, country),
+                CompareAtPrice = p.CompareAtPrice,
+                DiscountPercent = p.DiscountPercent,
                 Category = category ?? string.Empty,
                 Images = images,
                 Available = available,
