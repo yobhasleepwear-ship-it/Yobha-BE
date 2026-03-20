@@ -87,6 +87,18 @@ namespace ShoppingPlatform.Services
                 ["gift_card_number"] = order.GiftCardNumber,
                 ["country"] = order.orderCountry,
                 ["is_gift_wrap"] = order.isGiftWrap,
+                ["customer_name"] = user?.FullName ?? order.ShippingAddress?.FullName,
+                ["customer_phone"] = user?.PhoneNumber ?? order.ShippingAddress?.MobileNumner,
+                ["customer_email"] = email,
+                ["shipping_full_name"] = order.ShippingAddress?.FullName,
+                ["shipping_phone"] = order.ShippingAddress?.MobileNumner,
+                ["shipping_line1"] = order.ShippingAddress?.Line1,
+                ["shipping_line2"] = order.ShippingAddress?.Line2,
+                ["shipping_city"] = order.ShippingAddress?.City,
+                ["shipping_state"] = order.ShippingAddress?.State,
+                ["shipping_zip"] = order.ShippingAddress?.Zip,
+                ["shipping_country"] = order.ShippingAddress?.Country,
+                ["shipping_country_code"] = order.ShippingAddress?.countryCode,
                 ["items"] = BuildOrderItems(order.Items)
             };
 
@@ -330,7 +342,8 @@ namespace ShoppingPlatform.Services
                     ["thumbnail_url"] = item.ThumbnailUrl,
                     ["fabric"] = item.Fabric,
                     ["color"] = item.Color,
-                    ["monogram"] = item.Monogram
+                    ["monogram"] = item.Monogram,
+                    ["product_url"] = string.IsNullOrWhiteSpace(item.ProductId) ? null : $"https://www.yobha.world/productDetail/{item.ProductId}"
                 })
                 .ToList() ?? new List<Dictionary<string, object?>>();
         }
@@ -353,7 +366,7 @@ namespace ShoppingPlatform.Services
                     ["variant_id"] = item.Snapshot?.VariantId,
                     ["variant_size"] = item.Snapshot?.VariantSize,
                     ["variant_color"] = item.Snapshot?.VariantColor,
-                    ["product_url"] = string.IsNullOrWhiteSpace(item.Snapshot?.Slug) ? null : $"https://www.yobha.world/product-description/{item.Snapshot.Slug}"
+                    ["product_url"] = string.IsNullOrWhiteSpace(item.ProductId) ? null : $"https://www.yobha.world/productDetail/{item.ProductId}"
                 })
                 .ToList();
         }
