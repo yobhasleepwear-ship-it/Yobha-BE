@@ -47,13 +47,13 @@ namespace ShoppingPlatform.Services
             return UpsertContactAsync(email, attrs, BuildListIds(_settings.SignupListId), ct);
         }
 
-        public Task<bool> TrackOrderPlacedAsync(Order order, User? user = null, CancellationToken ct = default)
+        public async Task<bool> TrackOrderPlacedAsync(Order order, User? user = null, CancellationToken ct = default)
         {
             var email = ResolveOrderEmail(order, user);
             if (string.IsNullOrWhiteSpace(email))
             {
                 _logger.LogInformation("Brevo order tracking skipped: missing email for order {OrderNumber}", order.OrderNumber);
-                return Task.FromResult(false);
+                return false;
             }
 
             var attrs = new Dictionary<string, object?>
@@ -69,21 +69,59 @@ namespace ShoppingPlatform.Services
                 ["LAST_ORDER_PAYMENT_STATUS"] = order.PaymentStatus
             };
 
-            return UpsertContactAsync(email!, attrs, BuildListIds(_settings.OrderPlacedListId), ct);
+            var contactOk = await UpsertContactAsync(email!, attrs, BuildListIds(_settings.OrderPlacedListId), ct);
+
+            var eventProps = new Dictionary<string, object?>
+            {
+                ["order_id"] = order.OrderNumber,
+                ["payment_method"] = order.PaymentMethod,
+                ["payment_status"] = order.PaymentStatus,
+                ["status"] = order.Status,
+                ["currency"] = order.Currency,
+                ["subtotal"] = order.SubTotal,
+                ["shipping"] = order.Shipping,
+                ["tax"] = order.Tax,
+                ["discount"] = order.Discount,
+                ["total"] = order.Total,
+                ["coupon_code"] = order.CouponCode,
+                ["gift_card_number"] = order.GiftCardNumber,
+                ["country"] = order.orderCountry,
+                ["is_gift_wrap"] = order.isGiftWrap,
+                ["items"] = BuildOrderItems(order.Items)
+            };
+
+            var eventOk = await TrackEventAsync(
+                eventName: "order_placed",
+                email: email!,
+                eventDateUtc: order.UpdatedAt ?? order.CreatedAt,
+                eventProperties: eventProps,
+                contactProperties: BuildEventContactProperties(user?.FullName ?? order.ShippingAddress?.FullName, user?.PhoneNumber ?? order.ShippingAddress?.MobileNumner),
+                ct: ct);
+
+            _logger.LogInformation(
+                "Brevo order_placed sync finished for {Email}. ContactOk={ContactOk} EventOk={EventOk} ListId={ListId} Order={OrderNumber}",
+                email,
+                contactOk,
+                eventOk,
+                _settings.OrderPlacedListId,
+                order.OrderNumber);
+
+            return contactOk || eventOk;
         }
 
-        public Task<bool> TrackCartAbandonedAsync(User user, IEnumerable<CartItem> cartItems, DateTime cartUpdatedAtUtc, CancellationToken ct = default)
+        public async Task<bool> TrackCartAbandonedAsync(User user, IEnumerable<CartItem> cartItems, DateTime cartUpdatedAtUtc, CancellationToken ct = default)
         {
             var email = user.Email?.Trim().ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(email))
             {
                 _logger.LogInformation("Brevo cart-abandon skipped: missing email for user {UserId}", user.Id);
-                return Task.FromResult(false);
+                return false;
             }
 
             var items = cartItems?.ToList() ?? new List<CartItem>();
             var itemCount = items.Sum(i => i.Quantity);
             var total = items.Sum(i => i.Price * i.Quantity);
+            var currency = items.FirstOrDefault()?.Currency ?? "INR";
 
             var attrs = new Dictionary<string, object?>
             {
@@ -93,10 +131,37 @@ namespace ShoppingPlatform.Services
                 ["ABANDONED_CART_AT"] = cartUpdatedAtUtc.ToString("O"),
                 ["ABANDONED_CART_ITEM_COUNT"] = itemCount,
                 ["ABANDONED_CART_VALUE"] = total,
-                ["ABANDONED_CART_CURRENCY"] = items.FirstOrDefault()?.Currency ?? "INR"
+                ["ABANDONED_CART_CURRENCY"] = currency
             };
 
-            return UpsertContactAsync(email, attrs, BuildListIds(_settings.CartAbandonedListId), ct);
+            var contactOk = await UpsertContactAsync(email, attrs, BuildListIds(_settings.CartAbandonedListId), ct);
+
+            var eventProps = new Dictionary<string, object?>
+            {
+                ["cart_updated_at"] = cartUpdatedAtUtc.ToString("O"),
+                ["item_count"] = itemCount,
+                ["value"] = total,
+                ["currency"] = currency,
+                ["items"] = BuildCartItems(items)
+            };
+
+            var eventOk = await TrackEventAsync(
+                eventName: "cart_abandoned",
+                email: email,
+                eventDateUtc: cartUpdatedAtUtc,
+                eventProperties: eventProps,
+                contactProperties: BuildEventContactProperties(user.FullName, user.PhoneNumber),
+                ct: ct);
+
+            _logger.LogInformation(
+                "Brevo cart_abandoned sync finished for {Email}. ContactOk={ContactOk} EventOk={EventOk} ListId={ListId} Items={ItemCount}",
+                email,
+                contactOk,
+                eventOk,
+                _settings.CartAbandonedListId,
+                itemCount);
+
+            return contactOk || eventOk;
         }
 
         private async Task<bool> UpsertContactAsync(string email, Dictionary<string, object?> attributes, List<int>? listIds, CancellationToken ct)
@@ -151,6 +216,78 @@ namespace ShoppingPlatform.Services
             }
         }
 
+        private async Task<bool> TrackEventAsync(
+            string eventName,
+            string email,
+            DateTime? eventDateUtc,
+            Dictionary<string, object?> eventProperties,
+            Dictionary<string, object?>? contactProperties,
+            CancellationToken ct)
+        {
+            if (!_settings.Enabled)
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(_settings.ApiKey))
+            {
+                _logger.LogWarning("Brevo is enabled but ApiKey is empty. Skipping event {EventName} for {Email}", eventName, email);
+                return false;
+            }
+
+            try
+            {
+                var payload = new Dictionary<string, object?>
+                {
+                    ["event_name"] = eventName,
+                    ["identifiers"] = new Dictionary<string, object?>
+                    {
+                        ["email_id"] = email
+                    },
+                    ["event_properties"] = eventProperties,
+                };
+
+                if (contactProperties is { Count: > 0 })
+                {
+                    payload["contact_properties"] = contactProperties;
+                }
+
+                if (eventDateUtc.HasValue)
+                {
+                    payload["event_date"] = eventDateUtc.Value.ToString("O");
+                }
+
+                var req = new HttpRequestMessage(HttpMethod.Post, "events")
+                {
+                    Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+                };
+
+                req.Headers.Add("api-key", _settings.ApiKey);
+                req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+                var resp = await _http.SendAsync(req, ct);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    var body = await resp.Content.ReadAsStringAsync(ct);
+                    _logger.LogWarning(
+                        "Brevo event failed. Event={EventName} Status={Status} Email={Email} Body={Body}",
+                        eventName,
+                        (int)resp.StatusCode,
+                        email,
+                        body);
+                    return false;
+                }
+
+                _logger.LogInformation("Brevo event posted. Event={EventName} Email={Email}", eventName, email);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Brevo event exception. Event={EventName} Email={Email}", eventName, email);
+                return false;
+            }
+        }
+
         private List<int>? BuildListIds(params int?[] ids)
         {
             var valid = ids.Where(x => x.HasValue).Select(x => x!.Value).Distinct().ToList();
@@ -161,6 +298,64 @@ namespace ShoppingPlatform.Services
         {
             return user?.Email?.Trim().ToLowerInvariant()
                 ?? order.Email?.Trim().ToLowerInvariant();
+        }
+
+        private static Dictionary<string, object?> BuildEventContactProperties(string? fullName, string? phone)
+        {
+            var props = new Dictionary<string, object?>();
+            if (!string.IsNullOrWhiteSpace(fullName))
+            {
+                props["FULLNAME"] = fullName;
+            }
+            if (!string.IsNullOrWhiteSpace(phone))
+            {
+                props["PHONE"] = phone;
+            }
+            return props;
+        }
+
+        private static List<Dictionary<string, object?>> BuildOrderItems(IEnumerable<OrderItem>? items)
+        {
+            return items?
+                .Select(item => new Dictionary<string, object?>
+                {
+                    ["product_id"] = item.ProductId,
+                    ["product_object_id"] = item.ProductObjectId,
+                    ["name"] = item.ProductName,
+                    ["quantity"] = item.Quantity,
+                    ["size"] = item.Size,
+                    ["unit_price"] = item.UnitPrice,
+                    ["line_total"] = item.LineTotal,
+                    ["currency"] = item.Currency,
+                    ["thumbnail_url"] = item.ThumbnailUrl,
+                    ["fabric"] = item.Fabric,
+                    ["color"] = item.Color,
+                    ["monogram"] = item.Monogram
+                })
+                .ToList() ?? new List<Dictionary<string, object?>>();
+        }
+
+        private static List<Dictionary<string, object?>> BuildCartItems(IEnumerable<CartItem> items)
+        {
+            return items
+                .Select(item => new Dictionary<string, object?>
+                {
+                    ["product_id"] = item.ProductId,
+                    ["product_object_id"] = item.ProductObjectId,
+                    ["name"] = item.ProductName,
+                    ["variant_sku"] = item.VariantSku,
+                    ["quantity"] = item.Quantity,
+                    ["unit_price"] = item.Price,
+                    ["line_total"] = item.Price * item.Quantity,
+                    ["currency"] = item.Currency,
+                    ["slug"] = item.Snapshot?.Slug,
+                    ["thumbnail_url"] = item.Snapshot?.ThumbnailUrl,
+                    ["variant_id"] = item.Snapshot?.VariantId,
+                    ["variant_size"] = item.Snapshot?.VariantSize,
+                    ["variant_color"] = item.Snapshot?.VariantColor,
+                    ["product_url"] = string.IsNullOrWhiteSpace(item.Snapshot?.Slug) ? null : $"https://www.yobha.world/product-description/{item.Snapshot.Slug}"
+                })
+                .ToList();
         }
     }
 }
