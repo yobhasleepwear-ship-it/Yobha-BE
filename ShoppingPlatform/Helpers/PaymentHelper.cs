@@ -20,6 +20,32 @@ namespace ShoppingPlatform.Helpers
             _secretsRepo = secretsRepo ?? throw new ArgumentNullException(nameof(secretsRepo));
         }
 
+        public async Task<bool> VerifyPaymentSignatureAsync(string orderId, string paymentId, string signature, string currency)
+        {
+            if (string.IsNullOrWhiteSpace(orderId) || string.IsNullOrWhiteSpace(paymentId) || string.IsNullOrWhiteSpace(signature))
+            {
+                return false;
+            }
+
+            var secrets = await GetRazorpaySecretsDirectAsync("RazorPay");
+            if (secrets == null)
+            {
+                return false;
+            }
+
+            var useIntl = !string.Equals(currency, "INR", StringComparison.OrdinalIgnoreCase);
+            var keySecret = useIntl ? secrets.RAZOR_KEY_SECRET_INTL : secrets.RAZOR_KEY_SECRET_INR;
+            if (string.IsNullOrWhiteSpace(keySecret))
+            {
+                _log.LogError("VerifyPaymentSignatureAsync: missing Razorpay key secret for currency={Currency} intl={IsIntl}", currency, useIntl);
+                return false;
+            }
+
+            var payload = $"{orderId}|{paymentId}";
+            var expectedHex = ComputeHmacSha256Hex(payload, keySecret);
+            return SecureEqualsHex(expectedHex, signature);
+        }
+
         // Creates a Razorpay order. Fetches keys directly from DB each time.
         public async Task<RazorpayOrderResult> CreateRazorpayOrderAsync(string orderId, decimal amount, string currency, bool isInternational = false)
         {
@@ -277,6 +303,45 @@ namespace ShoppingPlatform.Helpers
             catch (Exception ex)
             {
                 _log.LogError(ex, "Error fetching Razorpay secrets from DB for {AddedFor}", addedFor);
+                return null;
+            }
+        }
+
+        private static string ComputeHmacSha256Hex(string text, string key)
+        {
+            var keyBytes = Encoding.UTF8.GetBytes(key);
+            var textBytes = Encoding.UTF8.GetBytes(text);
+            using var hmac = new System.Security.Cryptography.HMACSHA256(keyBytes);
+            var hashBytes = hmac.ComputeHash(textBytes);
+            return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static bool SecureEqualsHex(string aHexLower, string b)
+        {
+            if (string.IsNullOrEmpty(aHexLower) || string.IsNullOrEmpty(b)) return false;
+
+            var bLower = b.Replace("-", "").ToLowerInvariant();
+            if (bLower.Length != aHexLower.Length) return false;
+
+            var aBytes = HexStringToBytes(aHexLower);
+            var bBytes = HexStringToBytes(bLower);
+            if (aBytes == null || bBytes == null) return false;
+
+            return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(aBytes, bBytes);
+        }
+
+        private static byte[]? HexStringToBytes(string hex)
+        {
+            try
+            {
+                int len = hex.Length;
+                var bytes = new byte[len / 2];
+                for (int i = 0; i < len; i += 2)
+                    bytes[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
+                return bytes;
+            }
+            catch
+            {
                 return null;
             }
         }

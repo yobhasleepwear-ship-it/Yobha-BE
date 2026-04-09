@@ -11,13 +11,13 @@ namespace ShoppingPlatform.Controllers
     [Route("api/[controller]")]
     public class PaymentsController : ControllerBase
     {
-        private readonly IRazorpayService _razorpay;
+        private readonly ShoppingPlatform.Helpers.PaymentHelper _paymentHelper;
         private readonly IOrderRepository _orderRepo;
         private readonly Services.ICouponService _couponService;
 
-        public PaymentsController(IRazorpayService razorpay, IOrderRepository orderRepo, Services.ICouponService couponService)
+        public PaymentsController(ShoppingPlatform.Helpers.PaymentHelper paymentHelper, IOrderRepository orderRepo, Services.ICouponService couponService)
         {
-            _razorpay = razorpay;
+            _paymentHelper = paymentHelper;
             _orderRepo = orderRepo;
             _couponService = couponService;
         }
@@ -30,17 +30,15 @@ namespace ShoppingPlatform.Controllers
         {
             if (req == null) return BadRequest(ApiResponse<object>.Fail("Invalid request", null, System.Net.HttpStatusCode.BadRequest));
 
-            // verify signature using key secret
-            var ok = _razorpay.VerifyPaymentSignature(req.razorpayOrderId, req.razorpayPaymentId, req.razorpaySignature);
+            var order = await _orderRepo.GetByIdAsync(req.orderId);
+            if (order == null) return NotFound(ApiResponse<object>.Fail("Order not found", null, System.Net.HttpStatusCode.NotFound));
+
+            var ok = await _paymentHelper.VerifyPaymentSignatureAsync(req.razorpayOrderId, req.razorpayPaymentId, req.razorpaySignature, order.Currency);
             if (!ok) return BadRequest(ApiResponse<object>.Fail("Signature verification failed", null, System.Net.HttpStatusCode.BadRequest));
 
             // Use repository payment-status update path so all side effects (including Brevo tracking) stay consistent.
             var updated = await _orderRepo.UpdatePaymentStatusAsync(req.razorpayOrderId, req.razorpayPaymentId, true);
             if (!updated) return NotFound(ApiResponse<object>.Fail("Order not found", null, System.Net.HttpStatusCode.NotFound));
-
-            // find order by our own order id (receipt)
-            var order = await _orderRepo.GetByIdAsync(req.orderId);
-            if (order == null) return NotFound(ApiResponse<object>.Fail("Order not found", null, System.Net.HttpStatusCode.NotFound));
 
             // Mark coupon used now (if present and not already recorded)
             if (!string.IsNullOrEmpty(order.CouponId) && !order.CouponUsageRecorded)

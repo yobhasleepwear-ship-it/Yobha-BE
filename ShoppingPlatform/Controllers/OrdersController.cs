@@ -25,7 +25,7 @@ namespace ShoppingPlatform.Controllers
         private readonly ICartRepository _cartRepo;
         private readonly IProductRepository _productRepo;
         private readonly ICouponService _couponService;
-        private readonly IRazorpayService _razorpayService;
+        private readonly PaymentHelper _paymentHelper;
         private readonly ILogger<OrdersController> _logger;
         private readonly UserRepository _userRepo;
         private readonly ICouponRepository _couponRepo;
@@ -35,7 +35,7 @@ namespace ShoppingPlatform.Controllers
             ICartRepository cartRepo,
             IProductRepository productRepo,
             ICouponService couponService,
-            IRazorpayService razorpayService,
+            PaymentHelper paymentHelper,
             ILogger<OrdersController> logger,
             UserRepository userRepo,
             ICouponRepository couponRepo)
@@ -44,7 +44,7 @@ namespace ShoppingPlatform.Controllers
             _cartRepo = cartRepo;
             _productRepo = productRepo;
             _couponService = couponService;
-            _razorpayService = razorpayService;
+            _paymentHelper = paymentHelper;
             _logger = logger;
             _userRepo = userRepo;
             _couponRepo = couponRepo;
@@ -503,10 +503,11 @@ namespace ShoppingPlatform.Controllers
 
                 if (req.IsSuccess)
                 {
-                    var signatureOk = _razorpayService.VerifyPaymentSignature(
+                    var signatureOk = await _paymentHelper.VerifyPaymentSignatureAsync(
                         req.RazorpayOrderId,
                         req.RazorpayPaymentId,
-                        req.RazorpaySignature!);
+                        req.RazorpaySignature!,
+                        order.Currency);
 
                     if (!signatureOk)
                         return BadRequest(new { success = false, message = "Payment signature verification failed." });

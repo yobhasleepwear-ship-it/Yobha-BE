@@ -248,7 +248,7 @@ namespace ShoppingPlatform.Repositories
 
                 if (products.Count != productIds.Count)
                 {
-                    var missing = productIds.Except(products.Select(p => p.ProductId));
+                    var missing = productIds.Except(products.Select(p => p.Id));
                     throw new InvalidOperationException($"Products not found: {string.Join(',', missing)}");
                 }
 
