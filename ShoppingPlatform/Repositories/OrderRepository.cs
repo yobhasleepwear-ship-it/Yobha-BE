@@ -64,21 +64,7 @@ namespace ShoppingPlatform.Repositories
 
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
         {
-            var builder = Builders<Order>.Filter;
-
-            // ✅ Base filter: orders for user
-            var mongoFilter = builder.Eq(o => o.UserId, userId);
-
-            // ❌ Exclude Razorpay orders without RazorpayPaymentId
-            mongoFilter &= builder.Not(
-                builder.And(
-                    builder.Eq(o => o.PaymentMethod, "razorpay"),
-                    builder.Or(
-                        builder.Eq(o => o.RazorpayPaymentId, null),
-                        builder.Eq(o => o.RazorpayPaymentId, "")
-                    )
-                )
-            );
+            var mongoFilter = Builders<Order>.Filter.Eq(o => o.UserId, userId);
 
             return await _col
                 .Find(mongoFilter)
@@ -187,17 +173,6 @@ namespace ShoppingPlatform.Repositories
 
             if (filter.To.HasValue)
                 mongoFilter &= builder.Lte(o => o.CreatedAt, filter.To.Value);
-
-            // ❌ Exclude Razorpay orders without RazorpayOrderId
-            mongoFilter &= builder.Not(
-                builder.And(
-                    builder.Eq(o => o.PaymentMethod, "razorpay"),
-                    builder.Or(
-                        builder.Eq(o => o.RazorpayPaymentId, null),
-                        builder.Eq(o => o.RazorpayPaymentId, "")
-                    )
-                )
-            );
 
             // 🔹 Sorting
             var sortDef = sort switch
@@ -821,7 +796,9 @@ namespace ShoppingPlatform.Repositories
                 return false;
             }
 
-            var user = await _userRepository.GetByIdAsync(updatedOrder.UserId);
+            var user = !string.IsNullOrWhiteSpace(updatedOrder.UserId)
+                ? await _userRepository.GetByIdAsync(updatedOrder.UserId)
+                : null;
 
             if (isSuccess)
             {
@@ -858,6 +835,22 @@ namespace ShoppingPlatform.Repositories
             }
 
             return await _col.Find(o => o.RazorpayOrderId == razorpayOrderId).FirstOrDefaultAsync();
+        }
+
+        public async Task<bool> AssignOrderUserAsync(string orderId, string userId)
+        {
+            if (string.IsNullOrWhiteSpace(orderId) || string.IsNullOrWhiteSpace(userId))
+            {
+                return false;
+            }
+
+            var result = await _col.UpdateOneAsync(
+                o => o.Id == orderId,
+                Builders<Order>.Update
+                    .Set(o => o.UserId, userId)
+                    .Set(o => o.UpdatedAt, DateTime.UtcNow));
+
+            return result.ModifiedCount > 0;
         }
 
         public async Task<bool> updateOrderForReturn(string orderNumber, List<OrderItem> returnItems)

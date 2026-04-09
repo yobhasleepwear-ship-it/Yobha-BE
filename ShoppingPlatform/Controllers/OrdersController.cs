@@ -423,7 +423,7 @@ namespace ShoppingPlatform.Controllers
             if (req == null) return BadRequest("Request body required");
 
             // get user id from claims (adjust to your auth)
-            var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirst("uid")?.Value ?? string.Empty;
 
             _logger.LogInformation("CreateOrder called by user {UserId} paymentMethod={PaymentMethod}", userId, req.PaymentMethod);
 
@@ -490,8 +490,16 @@ namespace ShoppingPlatform.Controllers
                     return BadRequest(new { success = false, message = "OrderId mismatch for payment update." });
                 }
 
-                if (!string.Equals(order.UserId, userId, StringComparison.Ordinal))
+                if (string.IsNullOrWhiteSpace(order.UserId))
+                {
+                    await _orderRepo.AssignOrderUserAsync(order.Id, userId);
+                    order.UserId = userId;
+                }
+                else if (!string.Equals(order.UserId, userId, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning("Payment update ownership mismatch for order {OrderId}. OrderUserId={OrderUserId} RequestUserId={RequestUserId}", order.Id, order.UserId, userId);
                     return Forbid();
+                }
 
                 if (req.IsSuccess)
                 {
