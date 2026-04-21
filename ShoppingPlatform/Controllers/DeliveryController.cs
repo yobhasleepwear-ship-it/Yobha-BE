@@ -96,17 +96,22 @@ namespace ShoppingPlatform.Controllers
 
                         PickupName = request.PickupName,
                         PickupPhone = request.PickupPhone,
+                        PickupCity = request.PickupCity,
+                        PickupState = request.PickupState,
                         PickupAddress = request.PickupAddress,
                         PickupPincode = request.PickupPincode,
 
                         DropName = request.DropName,
                         DropPhone = request.DropPhone,
+                        DropCity = request.DropCity,
+                        DropState = request.DropState,
                         DropAddress = request.DropAddress,
                         DropPincode = request.DropPincode,
 
                         Weight = request.Weight,
                         IsCod = request.IsCod,
-                        CodAmount = request.IsCod ? request.CodAmount : 0
+                        CodAmount = request.IsCod ? request.CodAmount : 0,
+                        Amount = request.Amount
                     };
 
                     _logger.LogDebug("Domestic shipment payload: {@DomesticRequest}", domesticRequest);
