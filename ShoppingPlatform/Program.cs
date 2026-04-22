@@ -155,7 +155,10 @@ builder.Services.AddHttpClient<ISmsGatewayService, SmsGatewayService>(client =>
     client.Timeout = TimeSpan.FromSeconds(10);
 });
 builder.Services.AddScoped<ILoyaltyPointAuditService, LoyaltyPointAuditService>();
-builder.Services.AddScoped<IDeliveryService, DelhiveryDeliveryService>();
+builder.Services.AddHttpClient<IDeliveryService, DelhiveryDeliveryService>(client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 
 
