@@ -10,6 +10,7 @@ namespace ShoppingPlatform.DTOs
         [Required] public string ProductId { get; set; } = string.Empty; // readable PID (ex: PID10001)
                                                                          // front-end will send Size (e.g. "M","L","32")
         public string? Size { get; set; } = string.Empty;
+        public string? Color { get; set; } = string.Empty;
         [Range(1, 9999)] public int Quantity { get; set; } = 1;
 
         // Optional: client can pass the currency preference (server will validate)

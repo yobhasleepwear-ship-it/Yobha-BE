@@ -62,6 +62,72 @@ namespace ShoppingPlatform.Repositories
             _logger = logger;
         }
 
+        private static string NormalizeKey(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        }
+
+        private static bool EqualsIgnoreCase(string? left, string? right)
+        {
+            return string.Equals(NormalizeKey(left), NormalizeKey(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? ResolveSelectedColor(IEnumerable<string>? colors)
+        {
+            return colors?.FirstOrDefault(color => !string.IsNullOrWhiteSpace(color))?.Trim();
+        }
+
+        private static ProductVariant? ResolveVariant(Product product, string? size, string? color)
+        {
+            if (product.Variants?.Any() != true) return null;
+
+            var normalizedSize = NormalizeKey(size);
+            var normalizedColor = NormalizeKey(color);
+
+            var exactVariant = product.Variants.FirstOrDefault(variant =>
+                EqualsIgnoreCase(variant.Size, normalizedSize) &&
+                EqualsIgnoreCase(variant.Color, normalizedColor));
+
+            if (exactVariant != null) return exactVariant;
+
+            if (string.IsNullOrWhiteSpace(normalizedColor) &&
+                !string.IsNullOrWhiteSpace(normalizedSize))
+            {
+                return product.Variants.FirstOrDefault(variant => EqualsIgnoreCase(variant.Size, normalizedSize));
+            }
+
+            return null;
+        }
+
+        private static string? ResolveThumbnailUrl(Product product, ProductVariant? variant, string? color)
+        {
+            var variantImage = variant?.Images?.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(variantImage?.ThumbnailUrl) || !string.IsNullOrWhiteSpace(variantImage?.Url))
+            {
+                return variantImage?.ThumbnailUrl ?? variantImage?.Url;
+            }
+
+            if (!string.IsNullOrWhiteSpace(color) && product.Images?.Any() == true && product.AvailableColors?.Any() == true)
+            {
+                const int imagesPerColor = 4;
+                var colorIndex = product.AvailableColors.FindIndex(availableColor => EqualsIgnoreCase(availableColor, color));
+                if (colorIndex >= 0)
+                {
+                    var imageIndex = colorIndex * imagesPerColor;
+                    if (imageIndex < product.Images.Count)
+                    {
+                        var image = product.Images[imageIndex];
+                        if (!string.IsNullOrWhiteSpace(image?.ThumbnailUrl) || !string.IsNullOrWhiteSpace(image?.Url))
+                        {
+                            return image?.ThumbnailUrl ?? image?.Url;
+                        }
+                    }
+                }
+            }
+
+            return product.Images?.FirstOrDefault()?.ThumbnailUrl ?? product.Images?.FirstOrDefault()?.Url;
+        }
+
         public async Task<IEnumerable<Order>> GetForUserAsync(string userId)
         {
             var mongoFilter = Builders<Order>.Filter.Eq(o => o.UserId, userId);
@@ -268,6 +334,9 @@ namespace ShoppingPlatform.Repositories
                     decimal unitPrice = priceEntry.PriceAmount;
                     decimal lineTotal = unitPrice * qty;
 
+                    var selectedColor = ResolveSelectedColor(pr.Color);
+                    var matchedVariant = ResolveVariant(prod, pr.Size, selectedColor);
+
                     orderItems.Add(new OrderItem
                     {
                         ProductId = prod.ProductId,
@@ -280,7 +349,7 @@ namespace ShoppingPlatform.Repositories
                         UnitPrice = unitPrice,
                         LineTotal = lineTotal,
                         Currency = priceEntry.Currency,
-                        ThumbnailUrl = prod.Images?.FirstOrDefault()?.ThumbnailUrl,
+                        ThumbnailUrl = ResolveThumbnailUrl(prod, matchedVariant, selectedColor),
                         Monogram = pr.Monogram
                     });
                 }

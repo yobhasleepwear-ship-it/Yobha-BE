@@ -326,6 +326,22 @@ namespace ShoppingPlatform.Services
             return props;
         }
 
+        private static string? BuildProductUrl(string? productObjectId, IEnumerable<string>? colors)
+        {
+            if (string.IsNullOrWhiteSpace(productObjectId)) return null;
+
+            var color = colors?.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))?.Trim();
+            var url = $"https://www.yobha.world/productDetail/{productObjectId}";
+            return string.IsNullOrWhiteSpace(color)
+                ? url
+                : $"{url}?color={Uri.EscapeDataString(color)}";
+        }
+
+        private static string? BuildProductUrl(string? productObjectId, string? color)
+        {
+            return BuildProductUrl(productObjectId, string.IsNullOrWhiteSpace(color) ? null : new[] { color });
+        }
+
         private static List<Dictionary<string, object?>> BuildOrderItems(IEnumerable<OrderItem>? items)
         {
             return items?
@@ -343,7 +359,7 @@ namespace ShoppingPlatform.Services
                     ["fabric"] = item.Fabric,
                     ["color"] = item.Color,
                     ["monogram"] = item.Monogram,
-                    ["product_url"] = string.IsNullOrWhiteSpace(item.ProductId) ? null : $"https://www.yobha.world/productDetail/{item.ProductId}"
+                    ["product_url"] = BuildProductUrl(item.ProductObjectId, item.Color)
                 })
                 .ToList() ?? new List<Dictionary<string, object?>>();
         }
@@ -366,7 +382,7 @@ namespace ShoppingPlatform.Services
                     ["variant_id"] = item.Snapshot?.VariantId,
                     ["variant_size"] = item.Snapshot?.VariantSize,
                     ["variant_color"] = item.Snapshot?.VariantColor,
-                    ["product_url"] = string.IsNullOrWhiteSpace(item.ProductId) ? null : $"https://www.yobha.world/productDetail/{item.ProductId}"
+                    ["product_url"] = BuildProductUrl(item.ProductObjectId, item.Snapshot?.VariantColor)
                 })
                 .ToList();
         }

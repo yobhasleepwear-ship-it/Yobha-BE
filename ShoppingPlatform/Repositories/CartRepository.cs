@@ -119,8 +119,47 @@ namespace ShoppingPlatform.Repositories
             };
         }
 
+        private static string NormalizeKey(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? string.Empty : value.Trim();
+        }
+
+        private static bool EqualsIgnoreCase(string? left, string? right)
+        {
+            return string.Equals(NormalizeKey(left), NormalizeKey(right), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string? ResolveThumbnailUrl(Product product, ProductVariant? variant, string? color)
+        {
+            var variantImage = variant?.Images?.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(variantImage?.ThumbnailUrl) || !string.IsNullOrWhiteSpace(variantImage?.Url))
+            {
+                return variantImage?.ThumbnailUrl ?? variantImage?.Url;
+            }
+
+            if (!string.IsNullOrWhiteSpace(color) && product.Images?.Any() == true && product.AvailableColors?.Any() == true)
+            {
+                const int imagesPerColor = 4;
+                var colorIndex = product.AvailableColors.FindIndex(c => EqualsIgnoreCase(c, color));
+                if (colorIndex >= 0)
+                {
+                    var imageIndex = colorIndex * imagesPerColor;
+                    if (imageIndex < product.Images.Count)
+                    {
+                        var image = product.Images[imageIndex];
+                        if (!string.IsNullOrWhiteSpace(image?.ThumbnailUrl) || !string.IsNullOrWhiteSpace(image?.Url))
+                        {
+                            return image?.ThumbnailUrl ?? image?.Url;
+                        }
+                    }
+                }
+            }
+
+            return product.Images?.FirstOrDefault()?.ThumbnailUrl ?? product.Images?.FirstOrDefault()?.Url;
+        }
+
         // Add or update. Returns the saved DTO.
-        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? size, int quantity, string? currency, string? note = null)
+        public async Task<CartItemResponse> AddOrUpdateAsync(string userId, string productId, string? size, string? color, int quantity, string? currency, string? note = null)
         {
             if (string.IsNullOrWhiteSpace(productId))
                 throw new ArgumentException("productId cannot be null or empty.");
@@ -192,6 +231,28 @@ namespace ShoppingPlatform.Repositories
                 }
             }
 
+            var normalizedSize = NormalizeKey(size);
+            var normalizedColor = NormalizeKey(color);
+            ProductVariant? matchedVariant = null;
+            if (product.Variants?.Any() == true)
+            {
+                matchedVariant = product.Variants.FirstOrDefault(v =>
+                    EqualsIgnoreCase(v.Size, normalizedSize) &&
+                    EqualsIgnoreCase(v.Color, normalizedColor));
+
+                if (matchedVariant == null &&
+                    string.IsNullOrWhiteSpace(normalizedColor) &&
+                    !string.IsNullOrWhiteSpace(normalizedSize))
+                {
+                    matchedVariant = product.Variants.FirstOrDefault(v => EqualsIgnoreCase(v.Size, normalizedSize));
+                }
+            }
+
+            var variantSkuToMatch = matchedVariant?.Sku ?? normalizedSize;
+            var variantColorToMatch = !string.IsNullOrWhiteSpace(normalizedColor)
+                ? normalizedColor
+                : NormalizeKey(matchedVariant?.Color);
+
             // Build snapshot using matchedTier / product fallback
             var snapshot = new CartProductSnapshot
             {
@@ -199,10 +260,11 @@ namespace ShoppingPlatform.Repositories
                 ProductObjectId = product.Id,
                 Name = product.Name,
                 Slug = product.Slug,
-                ThumbnailUrl = product.Images?.FirstOrDefault()?.Url,
-                VariantSku = size,             // store chosen size into VariantSku for backwards compat
-                VariantId = matchedTier?.Id,
-                VariantSize = size,
+                ThumbnailUrl = ResolveThumbnailUrl(product, matchedVariant, variantColorToMatch),
+                VariantSku = variantSkuToMatch,
+                VariantId = matchedVariant?.Id ?? matchedTier?.Id,
+                VariantSize = normalizedSize,
+                VariantColor = variantColorToMatch,
                 UnitPrice = Math.Round(unitPrice, 2),
                 CompareAtPrice = product.CompareAtPrice,
                 Currency = currencyToUse,
@@ -220,30 +282,38 @@ namespace ShoppingPlatform.Repositories
                     Currency = p.Currency
                 }).ToList(),
                 countryPrice = suggestedCountryPrice,
-                Size = size
+                Size = normalizedSize
             };
 
-            // use size stored in VariantSku to identify item in cart collection
-            var skuToMatch = size ?? string.Empty;
+            var existingFilter =
+                Builders<CartItem>.Filter.Eq(c => c.UserId, userId) &
+                Builders<CartItem>.Filter.Eq(c => c.ProductId, productId) &
+                Builders<CartItem>.Filter.Eq(c => c.VariantSku, variantSkuToMatch);
 
-            var existing = await _col.Find(c => c.UserId == userId && c.ProductId == productId && c.VariantSku == skuToMatch).FirstOrDefaultAsync();
+            existingFilter &= string.IsNullOrWhiteSpace(variantColorToMatch)
+                ? Builders<CartItem>.Filter.Or(
+                    Builders<CartItem>.Filter.Eq<string?>("Snapshot.VariantColor", null),
+                    Builders<CartItem>.Filter.Eq("Snapshot.VariantColor", string.Empty))
+                : Builders<CartItem>.Filter.Eq("Snapshot.VariantColor", variantColorToMatch);
+
+            var existing = await _col.Find(existingFilter).FirstOrDefaultAsync();
 
             if (existing != null)
             {
-                // If requested quantity > availableStock, still allow but warn (or reject - choose behavior)
-                if (availableStock < quantity)
+                var nextQuantity = existing.Quantity + quantity;
+
+                if (availableStock < nextQuantity)
                 {
-                    // You may prefer to return failure instead of adding with smaller stock.
                     return new CartItemResponse
                     {
                         Success = false,
-                        Message = $"Insufficient stock for {product.Name} ({skuToMatch}). Available: {availableStock}",
+                        Message = $"Insufficient stock for {product.Name} ({variantSkuToMatch}). Available: {availableStock}",
                         Product = snapshot
                     };
                 }
 
                 var update = Builders<CartItem>.Update
-                    .Set(c => c.Quantity, quantity)
+                    .Set(c => c.Quantity, nextQuantity)
                     .Set(c => c.Price, unitPrice)
                     .Set(c => c.Currency, currencyToUse)
                     .Set(c => c.Snapshot, snapshot)
@@ -263,7 +333,7 @@ namespace ShoppingPlatform.Repositories
                     return new CartItemResponse
                     {
                         Success = false,
-                        Message = $"Insufficient stock for {product.Name} ({skuToMatch}). Available: {availableStock}",
+                        Message = $"Insufficient stock for {product.Name} ({variantSkuToMatch}). Available: {availableStock}",
                         Product = snapshot
                     };
                 }
@@ -274,7 +344,7 @@ namespace ShoppingPlatform.Repositories
                     ProductId = product.ProductId,
                     ProductObjectId = product.Id,
                     ProductName = product.Name,
-                    VariantSku = skuToMatch,            // store size here for compatibility with Order flow
+                    VariantSku = variantSkuToMatch,
                     Quantity = quantity,
                     Price = unitPrice,
                     Currency = currencyToUse,
