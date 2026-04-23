@@ -31,7 +31,9 @@ namespace ShoppingPlatform.Controllers
         [HttpPost("create-shipment")]
         public async Task<IActionResult> CreateShipment([FromBody] DeliveryRequest request)
         {
-            _logger.LogInformation("CreateShipment called with payload: {@Request}", request);
+            _logger.LogInformation(
+                "CreateShipment called | Summary={@ShipmentSummary}",
+                BuildShipmentLogSummary(request));
 
             if (string.IsNullOrWhiteSpace(request.OrderId))
             {
@@ -114,7 +116,9 @@ namespace ShoppingPlatform.Controllers
                         Amount = request.Amount
                     };
 
-                    _logger.LogDebug("Domestic shipment payload: {@DomesticRequest}", domesticRequest);
+                    _logger.LogInformation(
+                        "Domestic shipment request prepared | Summary={@ShipmentSummary}",
+                        BuildDomesticShipmentLogSummary(domesticRequest));
 
                     awb = await _deliveryService.CreateDomesticShipmentAsync(domesticRequest);
                 }
@@ -162,6 +166,62 @@ namespace ShoppingPlatform.Controllers
                     error = ex.Message
                 });
             }
+        }
+
+        private static object BuildShipmentLogSummary(DeliveryRequest request)
+        {
+            return new
+            {
+                request.OrderId,
+                request.ReferenceType,
+                request.IsInternational,
+                request.Weight,
+                request.IsCod,
+                request.Amount,
+                CodAmount = request.IsCod ? request.CodAmount : 0,
+                request.Currency,
+                request.CountryCode,
+                request.PickupPincode,
+                request.DropPincode,
+                DropCity = CleanForLog(request.DropCity),
+                DropState = CleanForLog(request.DropState),
+                PickupPhoneLast4 = Last4(request.PickupPhone),
+                DropPhoneLast4 = Last4(request.DropPhone),
+                DropAddressLength = request.DropAddress?.Length ?? 0,
+                DropNameLength = request.DropName?.Length ?? 0
+            };
+        }
+
+        private static object BuildDomesticShipmentLogSummary(DomesticShipmentRequest request)
+        {
+            return new
+            {
+                request.OrderId,
+                request.IsReverse,
+                request.Weight,
+                request.IsCod,
+                request.Amount,
+                CodAmount = request.IsCod ? request.CodAmount : 0,
+                request.PickupPincode,
+                request.DropPincode,
+                DropCity = CleanForLog(request.DropCity),
+                DropState = CleanForLog(request.DropState),
+                PickupPhoneLast4 = Last4(request.PickupPhone),
+                DropPhoneLast4 = Last4(request.DropPhone),
+                DropAddressLength = request.DropAddress?.Length ?? 0,
+                DropNameLength = request.DropName?.Length ?? 0
+            };
+        }
+
+        private static string? CleanForLog(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private static string? Last4(string? value)
+        {
+            var digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+            return digits.Length <= 4 ? digits : digits[^4..];
         }
 
 

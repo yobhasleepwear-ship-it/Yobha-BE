@@ -120,10 +120,29 @@ namespace ShoppingPlatform.Services
         { "data", JsonConvert.SerializeObject(payload) }
     };
 
+            _logger.LogInformation(
+                "Delhivery international shipment payload prepared | Summary={@ShipmentSummary}",
+                new
+                {
+                    OrderId = internalShipmentId,
+                    PickupLocation = _pickupLocation,
+                    request.CountryCode,
+                    request.Currency,
+                    request.Weight,
+                    request.Value,
+                    PhoneLast4 = Last4(request.DropPhone),
+                    DropPincode = request.DropPinCode,
+                    AddressLength = request.Address?.Length ?? 0,
+                    NameLength = request.Name?.Length ?? 0,
+                    request.Commodity
+                });
+
             var responseBody = await PostFormAsync(
                 "/api/cmu/create.json",
                 formData
             );
+
+            LogDelhiveryResponseSummary("international", responseBody);
 
             if (responseBody.StartsWith("<!doctype html", StringComparison.OrdinalIgnoreCase))
                 throw new Exception("Delhivery returned HTML – invalid endpoint or token");
@@ -173,7 +192,27 @@ namespace ShoppingPlatform.Services
         { "data", JsonConvert.SerializeObject(payload) }
     };
 
+            _logger.LogInformation(
+                "Delhivery domestic shipment payload prepared | Summary={@ShipmentSummary}",
+                new
+                {
+                    request.OrderId,
+                    PickupLocation = _pickupLocation,
+                    request.Weight,
+                    request.DropPincode,
+                    DropCity = CleanForLog(request.DropCity),
+                    DropState = CleanForLog(request.DropState),
+                    PhoneLast4 = Last4(request.DropPhone),
+                    PaymentMode = request.IsCod ? "COD" : "Prepaid",
+                    request.Amount,
+                    CodAmount = request.IsCod ? request.CodAmount : 0,
+                    AddressLength = request.DropAddress?.Length ?? 0,
+                    NameLength = request.DropName?.Length ?? 0
+                });
+
             var responseBody = await PostFormAsync("/api/cmu/create.json", formData);
+
+            LogDelhiveryResponseSummary("domestic", responseBody);
 
             var parsed = JsonConvert.DeserializeObject<dynamic>(responseBody);
 
@@ -182,6 +221,55 @@ namespace ShoppingPlatform.Services
 
             // ✅ THIS is the ONLY valid waybill
             return parsed.packages[0].waybill;
+        }
+
+        private void LogDelhiveryResponseSummary(string shipmentType, string responseBody)
+        {
+            try
+            {
+                var parsed = JsonConvert.DeserializeObject<dynamic>(responseBody);
+                var package = parsed?.packages != null && parsed.packages.Count > 0
+                    ? parsed.packages[0]
+                    : null;
+
+                _logger.LogInformation(
+                    "Delhivery {ShipmentType} shipment response | Summary={@ResponseSummary}",
+                    shipmentType,
+                    new
+                    {
+                        Success = (bool?)parsed?.success,
+                        UploadWbn = (string?)parsed?.upload_wbn,
+                        Remark = (string?)parsed?.rmk,
+                        Waybill = (string?)package?.waybill,
+                        Refnum = (string?)package?.refnum,
+                        Status = (string?)package?.status,
+                        ErrorCode = (string?)package?.err_code,
+                        Serviceable = (bool?)package?.serviceable,
+                        Payment = (string?)package?.payment,
+                        CodAmount = (decimal?)package?.cod_amount,
+                        SortCode = (string?)package?.sort_code,
+                        Remarks = package?.remarks?.ToString()
+                    });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Unable to parse Delhivery {ShipmentType} shipment response summary. ResponseLength={ResponseLength}",
+                    shipmentType,
+                    responseBody?.Length ?? 0);
+            }
+        }
+
+        private static string? CleanForLog(string? value)
+        {
+            return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        }
+
+        private static string? Last4(string? value)
+        {
+            var digits = new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+            return digits.Length <= 4 ? digits : digits[^4..];
         }
 
 
