@@ -911,6 +911,12 @@ namespace ShoppingPlatform.Controllers
                 countryCode = dto.countryCode
             };
 
+            address = AddressNormalizationHelper.NormalizeAddress(address);
+            if (!AddressNormalizationHelper.IsValidNormalizedAddress(address, out var addAddressError))
+            {
+                return BadRequest(ApiResponse<List<Address>>.Fail(addAddressError, null, HttpStatusCode.BadRequest));
+            }
+
             await _users.AddAddressAsync(uid, address);
 
             var addresses = await _users.GetAddressesAsync(uid);
@@ -942,6 +948,12 @@ namespace ShoppingPlatform.Controllers
                 MobileNumner = dto.MobileNumnber,
                 countryCode = dto.countryCode
             };
+
+            address = AddressNormalizationHelper.NormalizeAddress(address);
+            if (!AddressNormalizationHelper.IsValidNormalizedAddress(address, out var updateAddressError))
+            {
+                return BadRequest(ApiResponse<List<Address>>.Fail(updateAddressError, null, HttpStatusCode.BadRequest));
+            }
 
             var updated = await _users.UpdateAddressAsync(uid, address);
             if (!updated)

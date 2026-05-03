@@ -302,6 +302,16 @@ namespace ShoppingPlatform.Repositories
                 // allow empty shipping address only if buying gift card
                 if (req.GiftCardAmount == null) throw new ArgumentException("ShippingAddress required for non-gift-card orders");
             }
+
+            if (req.ShippingAddress != null)
+            {
+                req.ShippingAddress = AddressNormalizationHelper.NormalizeAddress(req.ShippingAddress);
+                if (!AddressNormalizationHelper.IsValidNormalizedAddress(req.ShippingAddress, out var shippingAddressError))
+                {
+                    throw new ArgumentException(shippingAddressError);
+                }
+            }
+
             var user = await _userRepository.GetByIdAsync(userId);
             // resolve products only if there are items
             var orderItems = new List<OrderItem>();
